@@ -1,0 +1,13 @@
+{
+  "name": "salesmartly-telegram-webhook",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vercel Serverless API for sending SaleSmartly and HelpKnow alerts to Telegram.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "vercel dev",
+    "deploy": "vercel deploy --prod"
+  }
+}
