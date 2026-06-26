@@ -46,6 +46,18 @@ staff_name
 bot_name
 ```
 
+Optional WhatsApp / SaleSmartly display name fields:
+
+```text
+ws_display_name
+whatsapp_name
+whatsapp_display_name
+contact_name
+profile_name
+salesmartly_contact_name
+customer_display_name
+```
+
 ## Test Payload
 
 ```bash
@@ -55,6 +67,7 @@ curl -X POST "https://your-domain.vercel.app/api/salesmartly-telegram-webhook" \
   --data-raw '{
     "customer_name": "Test Customer",
     "ai_employee_name": "Omen",
+    "ws_display_name": "John WhatsApp",
     "phone": "+1 000 000 0000",
     "channel": "WhatsApp",
     "last_message": "Please\nName: John Smith\nPhone: +1 000 000 0000\nPostal: 90001",
