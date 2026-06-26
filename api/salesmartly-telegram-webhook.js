@@ -13,6 +13,12 @@ function getLastMessage(body) {
   return valueOrFallback(body.last_message || body.message || body.content, "");
 }
 
+function getAiEmployeeName(body) {
+  return valueOrFallback(
+    body.ai_employee_name || body.agent_name || body.employee_name || body.staff_name || body.bot_name
+  );
+}
+
 function getWebhookSecret(req) {
   const authHeader = req.headers.authorization || "";
 
@@ -59,10 +65,12 @@ function isShippingInfoMessage(text) {
 
 function buildShippingInfoTelegramMessage(body, lastMessage) {
   const contact = valueOrFallback(body.phone || body.email);
+  const aiEmployeeName = getAiEmployeeName(body);
 
   return [
     "【客户已提交收货信息】",
     "",
+    `AI员工：${aiEmployeeName}`,
     `客户：${valueOrFallback(body.customer_name)}`,
     `渠道：${valueOrFallback(body.channel)}`,
     `联系方式：${contact}`,
@@ -87,10 +95,12 @@ function buildShippingInfoTelegramMessage(body, lastMessage) {
 
 function buildHumanHandoffTelegramMessage(body, lastMessage) {
   const contact = valueOrFallback(body.phone || body.email);
+  const aiEmployeeName = getAiEmployeeName(body);
 
   return [
     "【SaleSmartly 转人工提醒】",
     "",
+    `AI员工：${aiEmployeeName}`,
     `客户：${valueOrFallback(body.customer_name)}`,
     `渠道：${valueOrFallback(body.channel)}`,
     `联系方式：${contact}`,
