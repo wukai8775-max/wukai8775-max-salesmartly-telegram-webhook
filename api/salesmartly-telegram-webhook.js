@@ -19,6 +19,53 @@ function getAiEmployeeName(body) {
   );
 }
 
+function getWsDisplayName(body) {
+  return valueOrFallback(
+    body.ws_display_name ||
+      body.whatsapp_name ||
+      body.whatsapp_display_name ||
+      body.contact_name ||
+      body.profile_name ||
+      body.salesmartly_contact_name ||
+      body.customer_display_name ||
+      body.customer_name
+  );
+}
+
+function getSubmittedCustomerName(text, fallbackName) {
+  if (text === undefined || text === null) {
+    return valueOrFallback(fallbackName);
+  }
+
+  const normalized = String(text).replace(/\r\n/g, "\n").replace(/：/g, ":").trim();
+
+  if (!normalized) {
+    return valueOrFallback(fallbackName);
+  }
+
+  const lines = normalized.split("\n");
+  let submittedName = "";
+
+  for (const line of lines) {
+    const match = line.match(/^\s*name\s*:?\s*(.+?)\s*$/i);
+    if (match?.[1]?.trim()) {
+      submittedName = match[1].trim();
+      break;
+    }
+  }
+
+  if (!submittedName) {
+    const inlineMatch = normalized.match(/(?:^|[\n,;])\s*name\s*:?\s*([^\n,;]+)/i);
+    submittedName = inlineMatch?.[1]?.trim() || "";
+  }
+
+  submittedName = submittedName
+    .replace(/\s+(phone|postal|postcode|zip\s*code|address|email)\s*:.*$/i, "")
+    .trim();
+
+  return valueOrFallback(submittedName || fallbackName);
+}
+
 function getWebhookSecret(req) {
   const authHeader = req.headers.authorization || "";
 
@@ -66,12 +113,15 @@ function isShippingInfoMessage(text) {
 function buildShippingInfoTelegramMessage(body, lastMessage) {
   const contact = valueOrFallback(body.phone || body.email);
   const aiEmployeeName = getAiEmployeeName(body);
+  const wsDisplayName = getWsDisplayName(body);
+  const submittedCustomerName = getSubmittedCustomerName(lastMessage, body.customer_name);
 
   return [
     "【客户已提交收货信息】",
     "",
     `AI员工：${aiEmployeeName}`,
-    `客户：${valueOrFallback(body.customer_name)}`,
+    `WS名称：${wsDisplayName}`,
+    `客户填写姓名：${submittedCustomerName}`,
     `渠道：${valueOrFallback(body.channel)}`,
     `联系方式：${contact}`,
     "",
@@ -87,20 +137,23 @@ function buildShippingInfoTelegramMessage(body, lastMessage) {
     "",
     "请同事尽快进入 SaleSmartly 后台处理：",
     "",
-    "1. 核对客户收货信息",
-    "2. 确认产品和数量",
-    "3. 推进报价 / 付款 / 下单流程",
+    "1. 用 WS名称 或手机号搜索客户",
+    "2. 核对客户收货信息",
+    "3. 确认产品和数量",
+    "4. 推进报价 / 付款 / 下单流程",
   ].join("\n");
 }
 
 function buildHumanHandoffTelegramMessage(body, lastMessage) {
   const contact = valueOrFallback(body.phone || body.email);
   const aiEmployeeName = getAiEmployeeName(body);
+  const wsDisplayName = getWsDisplayName(body);
 
   return [
     "【SaleSmartly 转人工提醒】",
     "",
     `AI员工：${aiEmployeeName}`,
+    `WS名称：${wsDisplayName}`,
     `客户：${valueOrFallback(body.customer_name)}`,
     `渠道：${valueOrFallback(body.channel)}`,
     `联系方式：${contact}`,
