@@ -36,6 +36,16 @@ Header: x-salesmartly-webhook-secret = <SALES_SMARTLY_WEBHOOK_SECRET>
 URL: https://your-domain.vercel.app/api/salesmartly-telegram-webhook
 ```
 
+Optional AI employee name fields:
+
+```text
+ai_employee_name
+agent_name
+employee_name
+staff_name
+bot_name
+```
+
 ## Test Payload
 
 ```bash
@@ -44,6 +54,7 @@ curl -X POST "https://your-domain.vercel.app/api/salesmartly-telegram-webhook" \
   -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
   --data-raw '{
     "customer_name": "Test Customer",
+    "ai_employee_name": "Omen",
     "phone": "+1 000 000 0000",
     "channel": "WhatsApp",
     "last_message": "Please\nName: John Smith\nPhone: +1 000 000 0000\nPostal: 90001",
