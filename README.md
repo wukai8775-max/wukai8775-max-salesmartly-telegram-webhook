@@ -58,7 +58,9 @@ salesmartly_contact_name
 customer_display_name
 ```
 
-## Test Payload
+## Test Payloads
+
+### Shipping info
 
 ```bash
 curl -X POST "https://your-domain.vercel.app/api/salesmartly-telegram-webhook" \
@@ -77,4 +79,66 @@ curl -X POST "https://your-domain.vercel.app/api/salesmartly-telegram-webhook" \
     "contact_id": "test_contact",
     "session_id": "test_session"
   }'
+```
+
+Expected Telegram title:
+
+```text
+【客户已提交收货信息】
+```
+
+### Call or video request
+
+```bash
+curl -X POST "https://your-domain.vercel.app/api/salesmartly-telegram-webhook" \
+  -H "Content-Type: application/json" \
+  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
+  --data-raw '{
+    "last_message": "Can you call me? I want to talk to a real person.",
+    "trigger_reason": "客户要求电话联系或视频通话，需要人工跟进",
+    "ai_employee_name": "Omen",
+    "ws_display_name": "ShaLee",
+    "customer_name": "ShaLee",
+    "phone": "+1 3017511509",
+    "email": "",
+    "channel": "WhatsApp",
+    "conversation_url": "https://app.salesmartly.com/test",
+    "project_id": "",
+    "contact_id": "",
+    "session_id": ""
+  }'
+```
+
+Expected Telegram title:
+
+```text
+【客户要求电话/视频联系】
+```
+
+### AI or bot doubt
+
+```bash
+curl -X POST "https://your-domain.vercel.app/api/salesmartly-telegram-webhook" \
+  -H "Content-Type: application/json" \
+  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
+  --data-raw '{
+    "last_message": "Are you a bot? I want to talk to a real person.",
+    "trigger_reason": "客户质疑是否为AI/机器人，需要人工关注",
+    "ai_employee_name": "Jett",
+    "ws_display_name": "ShaLee",
+    "customer_name": "ShaLee",
+    "phone": "+1 3017511509",
+    "email": "",
+    "channel": "WhatsApp",
+    "conversation_url": "https://app.salesmartly.com/test",
+    "project_id": "",
+    "contact_id": "",
+    "session_id": ""
+  }'
+```
+
+Expected Telegram title:
+
+```text
+【客户质疑AI/机器人】
 ```
