@@ -66,6 +66,14 @@ function getSubmittedCustomerName(text, fallbackName) {
   return valueOrFallback(submittedName || fallbackName);
 }
 
+function normalizeCustomerMessage(text) {
+  if (text === undefined || text === null) {
+    return "";
+  }
+
+  return String(text).replace(/\r\n/g, "\n").replace(/：/g, ":").toLowerCase().trim();
+}
+
 function getWebhookSecret(req) {
   const authHeader = req.headers.authorization || "";
 
@@ -110,6 +118,65 @@ function isShippingInfoMessage(text) {
   return hasName && hasPhone && hasPostalOrAddress;
 }
 
+function isCallRequestMessage(text) {
+  const normalized = normalizeCustomerMessage(text);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return [
+    /\b(can|could|would|will)\s+you\s+(please\s+)?call\s+me\b/,
+    /\bplease\s+call\s+me\b/,
+    /\bcall\s+me\b/,
+    /\bphone\s+call\b/,
+    /\bvoice\s+call\b/,
+    /\bvideo\s+(call|chat)\b/,
+    /\bwhatsapp\s+call\b/,
+    /\b(can|could)\s+we\s+(talk|speak)\b/,
+    /\b(talk|speak)\s+on\s+(the\s+)?phone\b/,
+    /\bfacetime\b/,
+    /\bzoom\b/,
+    /\bcan\s+i\s+(speak|talk)\s+to\s+someone\b/,
+    /\bi\s+(want|need)\s+to\s+(speak|talk)\s+with\s+someone\b/,
+    /\bhuman\s+call\b/,
+    /\breal\s+person\s+call\b/,
+    /\bcall\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function isAiDoubtMessage(text) {
+  const normalized = normalizeCustomerMessage(text);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return [
+    /\bare\s+you\s+(an?\s+)?ai\b/,
+    /\bare\s+you\s+(a\s+)?bot\b/,
+    /\bare\s+you\s+(a\s+)?robot\b/,
+    /\bare\s+you\s+real\b/,
+    /\bare\s+you\s+a\s+real\s+person\b/,
+    /\bare\s+you\s+human\b/,
+    /\bis\s+this\s+(an?\s+)?automated(\s+reply)?\b/,
+    /\bautomated\s+reply\b/,
+    /\bauto\s+reply\b/,
+    /\bchat\s*bot\b/,
+    /\btalking\s+to\s+(a\s+)?(bot|ai)\b/,
+    /\bam\s+i\s+talking\s+to\s+(a\s+)?(bot|ai)\b/,
+    /\bi\s+am\s+talking\s+to\s+(a\s+)?(bot|ai)\b/,
+    /\bi\s+(want|need)\s+a\s+real\s+person\b/,
+    /\bi\s+(want|need)\s+a\s+human\b/,
+    /\bnot\s+a\s+bot\b/,
+    /\bno\s+bots\b/,
+    /\breal\s+person\b/,
+    /\bhuman\s+agent\b/,
+    /\blive\s+(agent|person)\b/,
+    /\bcustomer\s+service\s+agent\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
 function buildShippingInfoTelegramMessage(body, lastMessage) {
   const contact = valueOrFallback(body.phone || body.email);
   const aiEmployeeName = getAiEmployeeName(body);
@@ -137,6 +204,68 @@ function buildShippingInfoTelegramMessage(body, lastMessage) {
     "2. 核对客户收货信息",
     "3. 确认产品和数量",
     "4. 推进报价 / 付款 / 下单流程",
+  ].join("\n");
+}
+
+function buildCallRequestTelegramMessage(body, lastMessage) {
+  const contact = valueOrFallback(body.phone || body.email);
+  const aiEmployeeName = getAiEmployeeName(body);
+  const wsDisplayName = getWsDisplayName(body);
+
+  return [
+    "【客户要求电话/视频联系】",
+    "",
+    `AI员工：${aiEmployeeName}`,
+    `WS名称：${wsDisplayName}`,
+    `客户：${valueOrFallback(body.customer_name)}`,
+    `渠道：${valueOrFallback(body.channel)}`,
+    `联系方式：${contact}`,
+    "",
+    "触发原因：客户要求电话联系或视频通话，需要人工跟进",
+    "",
+    "客户最后消息：",
+    valueOrFallback(lastMessage),
+    "",
+    "会话链接：",
+    valueOrFallback(body.conversation_url),
+    "",
+    "请同事尽快进入 SaleSmartly 后台处理：",
+    "",
+    "1. 用 WS名称 或手机号搜索客户",
+    "2. 判断是否需要人工接入",
+    "3. 如适合电话/视频沟通，请人工跟进",
+    "4. 如不方便通话，请在聊天中安抚并继续推进下单流程",
+  ].join("\n");
+}
+
+function buildAiDoubtTelegramMessage(body, lastMessage) {
+  const contact = valueOrFallback(body.phone || body.email);
+  const aiEmployeeName = getAiEmployeeName(body);
+  const wsDisplayName = getWsDisplayName(body);
+
+  return [
+    "【客户质疑AI/机器人】",
+    "",
+    `AI员工：${aiEmployeeName}`,
+    `WS名称：${wsDisplayName}`,
+    `客户：${valueOrFallback(body.customer_name)}`,
+    `渠道：${valueOrFallback(body.channel)}`,
+    `联系方式：${contact}`,
+    "",
+    "触发原因：客户质疑是否为AI/机器人，需要人工关注",
+    "",
+    "客户最后消息：",
+    valueOrFallback(lastMessage),
+    "",
+    "会话链接：",
+    valueOrFallback(body.conversation_url),
+    "",
+    "请同事尽快进入 SaleSmartly 后台处理：",
+    "",
+    "1. 用 WS名称 或手机号搜索客户",
+    "2. 判断客户是否已经产生不信任",
+    "3. 必要时人工接入安抚客户",
+    "4. 回复时避免继续强调 AI 身份，保持自然、专业、真人化沟通",
   ].join("\n");
 }
 
@@ -227,17 +356,26 @@ module.exports = async function handler(req, res) {
 
   const body = req.body || {};
   const lastMessage = getLastMessage(body);
-  const shippingInfoMessage = isShippingInfoMessage(lastMessage);
-  const telegramText = shippingInfoMessage
-    ? buildShippingInfoTelegramMessage(body, lastMessage)
-    : buildHumanHandoffTelegramMessage(body, lastMessage);
+  let alertType = "human_handoff";
+  let telegramText = buildHumanHandoffTelegramMessage(body, lastMessage);
+
+  if (isShippingInfoMessage(lastMessage)) {
+    alertType = "shipping_info";
+    telegramText = buildShippingInfoTelegramMessage(body, lastMessage);
+  } else if (isCallRequestMessage(lastMessage)) {
+    alertType = "call_request";
+    telegramText = buildCallRequestTelegramMessage(body, lastMessage);
+  } else if (isAiDoubtMessage(lastMessage)) {
+    alertType = "ai_doubt";
+    telegramText = buildAiDoubtTelegramMessage(body, lastMessage);
+  }
 
   try {
     const telegramResult = await sendTelegramMessage(telegramText);
 
     return res.status(200).json({
       ok: true,
-      type: shippingInfoMessage ? "shipping_info" : "human_handoff",
+      type: alertType,
       telegram_message_id: telegramResult.result?.message_id,
     });
   } catch (error) {
@@ -249,3 +387,5 @@ module.exports = async function handler(req, res) {
 };
 
 module.exports.isShippingInfoMessage = isShippingInfoMessage;
+module.exports.isCallRequestMessage = isCallRequestMessage;
+module.exports.isAiDoubtMessage = isAiDoubtMessage;
