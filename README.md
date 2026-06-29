@@ -10,6 +10,7 @@ POST /api/salesmartly-telegram-webhook
 
 GET  /api/salesmartly-official-webhook
 POST /api/salesmartly-official-webhook
+POST /api/salesmartly-official-webhook-yuan-alert
 
 GET  /api/analyze-followups
 POST /api/analyze-followups
@@ -157,6 +158,15 @@ If SaleSmartly webhook token validation fails, use the shared secret fallback UR
 ```text
 https://wukai8775-max-salesmartly-telegram.vercel.app/api/salesmartly-official-webhook?secret=<SALES_SMARTLY_WEBHOOK_SECRET>
 ```
+
+If SaleSmartly official webhook token validation keeps returning `POST 401`, configure the SaleSmartly enterprise developer webhook push URL as:
+
+```text
+URL: https://wukai8775-max-salesmartly-telegram.vercel.app/api/salesmartly-official-webhook-yuan-alert
+Method: POST
+```
+
+This dedicated receiver does not validate header token, signature, or `query.secret`. It reuses the same post-validation business logic as `/api/salesmartly-official-webhook`, including Supabase message/customer storage, opt-out follow-up stopping, and Telegram shipping-info alerts.
 
 The receiver extracts and stores:
 
