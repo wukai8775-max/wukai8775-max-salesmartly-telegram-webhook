@@ -1,7 +1,10 @@
 const {
   normalizeOfficialPayload,
   cacheSalesmartlyProfile,
+  findDeepValue,
+  firstNonEmpty,
 } = require("../lib/salesmartly-profile");
+const { saveOfficialWebhookEvent } = require("../lib/supabase-store");
 
 function getOfficialWebhookToken(req) {
   const authHeader = req.headers.authorization || "";
@@ -42,6 +45,60 @@ function verifyOfficialWebhookToken(req) {
   };
 }
 
+function normalizeDirection(value) {
+  const text = String(value || "").trim().toLowerCase();
+
+  if (["customer", "ai", "human", "system"].includes(text)) {
+    return text;
+  }
+
+  if (["visitor", "contact", "user", "client", "guest"].includes(text)) {
+    return "customer";
+  }
+
+  if (text.includes("bot") || text.includes("ai")) {
+    return "ai";
+  }
+
+  if (text.includes("staff") || text.includes("agent") || text.includes("admin") || text.includes("seller")) {
+    return "human";
+  }
+
+  if (text.includes("system")) {
+    return "system";
+  }
+
+  return "";
+}
+
+function detectMessageDirection(payload = {}, normalized = {}) {
+  const explicit = normalizeDirection(
+    firstNonEmpty(
+      findDeepValue(payload, ["direction", "message_direction", "from_type", "sender_role"]),
+      normalized.direction
+    )
+  );
+
+  if (explicit) {
+    return explicit;
+  }
+
+  const senderType = normalizeDirection(
+    firstNonEmpty(normalized.sender_type, findDeepValue(payload, ["sender_type", "senderType"]))
+  );
+
+  if (senderType) {
+    return senderType;
+  }
+
+  const sysUserId = firstNonEmpty(normalized.sys_user_id, findDeepValue(payload, ["sys_user_id"]));
+  if (sysUserId) {
+    return "human";
+  }
+
+  return normalized.last_message ? "customer" : "system";
+}
+
 module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
@@ -68,12 +125,24 @@ module.exports = async function handler(req, res) {
   const payload = req.body || {};
   const normalized = normalizeOfficialPayload(payload);
   const cachedProfile = cacheSalesmartlyProfile(normalized);
+  const direction = detectMessageDirection(payload, normalized);
+  const storedProfile = {
+    ...normalized,
+    ...cachedProfile,
+  };
+  const storeResult = await saveOfficialWebhookEvent(storedProfile, payload, direction).catch((error) => ({
+    saved: false,
+    reason: error.message,
+  }));
 
   return res.status(200).json({
     success: true,
     ok: true,
     cached: true,
+    saved: Boolean(storeResult.saved),
+    save_reason: storeResult.saved ? undefined : storeResult.reason,
     event_type: normalized.event_type || "unknown",
+    direction,
     profile: {
       ws_display_name: cachedProfile.ws_display_name || "",
       customer_name: cachedProfile.customer_name || "",
@@ -83,7 +152,9 @@ module.exports = async function handler(req, res) {
       contact_id: cachedProfile.contact_id || "",
       session_id: cachedProfile.session_id || "",
       project_id: cachedProfile.project_id || "",
+      conversation_url: cachedProfile.conversation_url || "",
       last_message: cachedProfile.last_message || "",
+      message_time: normalized.message_time || "",
     },
   });
 };
