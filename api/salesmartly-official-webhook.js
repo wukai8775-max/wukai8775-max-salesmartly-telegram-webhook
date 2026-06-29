@@ -7,9 +7,10 @@ const {
   getDisplayName,
   getContactDisplayValue,
   getSearchKeyword,
+  extractPhoneFromText,
+  extractEmailFromText,
 } = require("../lib/salesmartly-profile");
 const { saveOfficialWebhookEvent } = require("../lib/supabase-store");
-const { isShippingInfoMessage } = require("../lib/followup-rules");
 const { sendTelegramMessage } = require("../lib/telegram");
 
 function normalizeTokenValue(value) {
@@ -155,6 +156,82 @@ function detectMessageDirection(payload = {}, normalized = {}) {
   return normalized.last_message ? "customer" : "system";
 }
 
+function normalizeMessageText(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\uFF1A/g, ":")
+    .toLowerCase()
+    .trim();
+}
+
+function getMessageLines(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isLikelyNameLine(line) {
+  const text = String(line || "").trim();
+
+  if (!text || text.length < 3 || text.length > 80 || /[0-9@:/\\]/.test(text)) {
+    return false;
+  }
+
+  if (
+    /\b(usa|united states|canada|uk|australia|address|phone|email|postal|postcode|zip|shipping|delivery|country|region)\b/i.test(
+      text
+    )
+  ) {
+    return false;
+  }
+
+  return /^[a-z][a-z\s.'-]+$/i.test(text) && text.split(/\s+/).length >= 2;
+}
+
+function isOfficialShippingInfoMessage(text) {
+  const normalized = normalizeMessageText(text);
+
+  if (!normalized) {
+    return false;
+  }
+
+  const lines = getMessageLines(text);
+  const hasPhone = Boolean(extractPhoneFromText(normalized));
+  const hasEmail = Boolean(extractEmailFromText(normalized));
+  const hasLikelyNameLine = lines.some(isLikelyNameLine);
+  const hasCountryOrRegionLine = lines.some((line) =>
+    /\b(usa|united states|canada|uk|australia|germany|france|spain|italy|netherlands|country|region)\b/i.test(line)
+  );
+  const hasPostalCode = /\b\d{4,10}\b/.test(normalized);
+  const hasStreetAddress = /\b(street|st\.|road|rd\.|avenue|ave\.|drive|dr\.|lane|ln\.|blvd|apt|suite|unit)\b/i.test(
+    normalized
+  );
+  const hasName =
+    /(?:^|\n)\s*(name|full\s+name|customer\s+name)\s*:?\s*\S+/i.test(normalized) ||
+    /\bmy\s+name\s+is\s+[a-z][a-z\s.'-]{1,}/i.test(normalized) ||
+    hasLikelyNameLine;
+  const hasContact =
+    /(?:^|\n)\s*(phone|tel|telephone|mobile|whatsapp|email)\s*:?\s*\S+/i.test(normalized) ||
+    hasPhone ||
+    hasEmail;
+  const hasAddress =
+    /(?:^|\n)\s*(address|street|city|state|country|postal|postcode|zip|zip\s+code)\s*:?\s*\S+/i.test(
+      normalized
+    ) ||
+    hasPostalCode ||
+    hasStreetAddress ||
+    hasCountryOrRegionLine;
+  const hasStructuredBlock =
+    lines.length >= 3 &&
+    hasContact &&
+    hasAddress &&
+    (hasName || (hasPhone && hasEmail) || (hasCountryOrRegionLine && hasPostalCode));
+
+  return (hasName && hasContact && hasAddress) || hasStructuredBlock;
+}
+
 function getAiEmployeeName(profile = {}) {
   return valueOrFallback(
     profile.ai_employee_name || profile.agent_name || profile.employee_name || profile.staff_name || profile.bot_name
@@ -229,7 +306,7 @@ function buildOfficialShippingInfoTelegramMessage(profile = {}, lastMessage = ""
 async function sendOfficialTelegramAlertIfNeeded(profile = {}, direction = "system") {
   const lastMessage = valueOrFallback(profile.last_message, "");
 
-  if (direction !== "customer" || !isShippingInfoMessage(lastMessage)) {
+  if (direction !== "customer" || !isOfficialShippingInfoMessage(lastMessage)) {
     return {
       sent: false,
       reason: "not_shipping_info",
