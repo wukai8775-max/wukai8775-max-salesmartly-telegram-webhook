@@ -1,13 +1,15 @@
+const {
+  valueOrFallback,
+  firstNonEmpty,
+  getDisplayName,
+  getContactDisplayValue,
+  getSearchKeyword,
+  extractPhoneFromText,
+  extractEmailFromText,
+  enrichPayloadWithSalesmartlyProfile,
+} = require("../lib/salesmartly-profile");
+
 const TELEGRAM_API_BASE = "https://api.telegram.org";
-
-function valueOrFallback(value, fallback = "未提供") {
-  if (value === undefined || value === null) {
-    return fallback;
-  }
-
-  const text = String(value).trim();
-  return text ? text : fallback;
-}
 
 function getLastMessage(body) {
   return valueOrFallback(body.last_message || body.message || body.content, "");
@@ -16,19 +18,6 @@ function getLastMessage(body) {
 function getAiEmployeeName(body) {
   return valueOrFallback(
     body.ai_employee_name || body.agent_name || body.employee_name || body.staff_name || body.bot_name
-  );
-}
-
-function getWsDisplayName(body) {
-  return valueOrFallback(
-    body.ws_display_name ||
-      body.whatsapp_name ||
-      body.whatsapp_display_name ||
-      body.contact_name ||
-      body.profile_name ||
-      body.salesmartly_contact_name ||
-      body.customer_display_name ||
-      body.customer_name
   );
 }
 
@@ -47,20 +36,20 @@ function getSubmittedCustomerName(text, fallbackName) {
   let submittedName = "";
 
   for (const line of lines) {
-    const match = line.match(/^\s*name\s*:?\s*(.+?)\s*$/i);
-    if (match?.[1]?.trim()) {
-      submittedName = match[1].trim();
+    const match = line.match(/^\s*(name|full name|customer name)\s*:?\s*(.+?)\s*$/i);
+    if (match?.[2]?.trim()) {
+      submittedName = match[2].trim();
       break;
     }
   }
 
   if (!submittedName) {
-    const inlineMatch = normalized.match(/(?:^|[\n,;])\s*name\s*:?\s*([^\n,;]+)/i);
+    const inlineMatch = normalized.match(/\bmy\s+name\s+is\s+([^\n,;]+)/i);
     submittedName = inlineMatch?.[1]?.trim() || "";
   }
 
   submittedName = submittedName
-    .replace(/\s+(phone|postal|postcode|zip\s*code|address|email)\s*:.*$/i, "")
+    .replace(/\s+(phone|tel|mobile|whatsapp|postal|postcode|zip\s*code|address|email)\s*:.*$/i, "")
     .trim();
 
   return valueOrFallback(submittedName || fallbackName);
@@ -96,26 +85,29 @@ function verifyWebhookSecret(req) {
 }
 
 function isShippingInfoMessage(text) {
-  if (text === undefined || text === null) {
-    return false;
-  }
-
-  const normalized = String(text)
-    .replace(/\r\n/g, "\n")
-    .replace(/：/g, ":")
-    .toLowerCase()
-    .trim();
+  const normalized = normalizeCustomerMessage(text);
 
   if (!normalized) {
     return false;
   }
 
-  const hasName = /(?:^|[\s\n,;])name\s*:?\s*\S+/i.test(normalized);
-  const hasPhone = /(?:^|[\s\n,;])phone\s*:?\s*(?:\+?\d[\d\s().-]{5,}|\S+@\S+)/i.test(normalized);
-  const hasPostalOrAddress =
-    /(?:^|[\s\n,;])(?:postal|postcode|zip(?:\s*code)?|address)\s*:?\s*\S+/i.test(normalized);
+  const hasName =
+    /(?:^|\n)\s*(name|full\s+name|customer\s+name)\s*:?\s*\S+/i.test(normalized) ||
+    /\bmy\s+name\s+is\s+[a-z][a-z\s.'-]{1,}/i.test(normalized);
 
-  return hasName && hasPhone && hasPostalOrAddress;
+  const hasContact =
+    /(?:^|\n)\s*(phone|tel|telephone|mobile|whatsapp|email)\s*:?\s*\S+/i.test(normalized) ||
+    Boolean(extractPhoneFromText(normalized)) ||
+    Boolean(extractEmailFromText(normalized));
+
+  const hasAddress =
+    /(?:^|\n)\s*(address|street|city|state|country|postal|postcode|zip|zip\s+code)\s*:?\s*\S+/i.test(
+      normalized
+    ) ||
+    /\b\d{4,10}\b/.test(normalized) ||
+    /\b(street|st\.|road|rd\.|avenue|ave\.|drive|dr\.|lane|ln\.|blvd|usa|united states)\b/i.test(normalized);
+
+  return [hasName, hasContact, hasAddress].filter(Boolean).length >= 2;
 }
 
 function isCallRequestMessage(text) {
@@ -141,7 +133,6 @@ function isCallRequestMessage(text) {
     /\bi\s+(want|need)\s+to\s+(speak|talk)\s+with\s+someone\b/,
     /\bhuman\s+call\b/,
     /\breal\s+person\s+call\b/,
-    /\bcall\b/,
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -168,6 +159,7 @@ function isAiDoubtMessage(text) {
     /\bi\s+am\s+talking\s+to\s+(a\s+)?(bot|ai)\b/,
     /\bi\s+(want|need)\s+a\s+real\s+person\b/,
     /\bi\s+(want|need)\s+a\s+human\b/,
+    /\bi\s+(want|need)\s+to\s+(talk|speak)\s+to\s+a\s+real\s+person\b/,
     /\bnot\s+a\s+bot\b/,
     /\bno\s+bots\b/,
     /\breal\s+person\b/,
@@ -177,20 +169,55 @@ function isAiDoubtMessage(text) {
   ].some((pattern) => pattern.test(normalized));
 }
 
-function buildShippingInfoTelegramMessage(body, lastMessage) {
-  const contact = valueOrFallback(body.phone || body.email);
-  const aiEmployeeName = getAiEmployeeName(body);
-  const wsDisplayName = getWsDisplayName(body);
-  const submittedCustomerName = getSubmittedCustomerName(lastMessage, body.customer_name);
+function detectAlertType(payload) {
+  const text = getLastMessage(payload);
 
+  if (isShippingInfoMessage(text)) {
+    return "shipping_info";
+  }
+
+  if (isCallRequestMessage(text)) {
+    return "call_request";
+  }
+
+  if (isAiDoubtMessage(text)) {
+    return "ai_doubt";
+  }
+
+  return null;
+}
+
+function buildWsLine(body) {
+  const wsDisplayName = getDisplayName(body);
+  return wsDisplayName ? [`WS名称：${wsDisplayName}`] : [];
+}
+
+function buildCommonTopLines(body, lastMessage, options = {}) {
+  const lines = [
+    `AI员工：${getAiEmployeeName(body)}`,
+    ...buildWsLine(body),
+  ];
+
+  if (options.submittedCustomerName) {
+    lines.push(`客户填写姓名：${getSubmittedCustomerName(lastMessage, body.customer_name)}`);
+  } else {
+    lines.push(`客户：${valueOrFallback(body.customer_name)}`);
+  }
+
+  lines.push(
+    `渠道：${valueOrFallback(body.channel)}`,
+    `联系方式：${getContactDisplayValue(body, lastMessage)}`,
+    `搜索关键词：${getSearchKeyword(body, lastMessage)}`
+  );
+
+  return lines;
+}
+
+function buildShippingInfoTelegramMessage(body, lastMessage) {
   return [
     "【客户已提交收货信息】",
     "",
-    `AI员工：${aiEmployeeName}`,
-    `WS名称：${wsDisplayName}`,
-    `客户填写姓名：${submittedCustomerName}`,
-    `渠道：${valueOrFallback(body.channel)}`,
-    `联系方式：${contact}`,
+    ...buildCommonTopLines(body, lastMessage, { submittedCustomerName: true }),
     "",
     "客户提交内容：",
     valueOrFallback(lastMessage),
@@ -200,7 +227,7 @@ function buildShippingInfoTelegramMessage(body, lastMessage) {
     "",
     "请同事尽快进入 SaleSmartly 后台处理：",
     "",
-    "1. 用 WS名称 或手机号搜索客户",
+    "1. 用搜索关键词搜索客户",
     "2. 核对客户收货信息",
     "3. 确认产品和数量",
     "4. 推进报价 / 付款 / 下单流程",
@@ -208,18 +235,10 @@ function buildShippingInfoTelegramMessage(body, lastMessage) {
 }
 
 function buildCallRequestTelegramMessage(body, lastMessage) {
-  const contact = valueOrFallback(body.phone || body.email);
-  const aiEmployeeName = getAiEmployeeName(body);
-  const wsDisplayName = getWsDisplayName(body);
-
   return [
     "【客户要求电话/视频联系】",
     "",
-    `AI员工：${aiEmployeeName}`,
-    `WS名称：${wsDisplayName}`,
-    `客户：${valueOrFallback(body.customer_name)}`,
-    `渠道：${valueOrFallback(body.channel)}`,
-    `联系方式：${contact}`,
+    ...buildCommonTopLines(body, lastMessage),
     "",
     "触发原因：客户要求电话联系或视频通话，需要人工跟进",
     "",
@@ -231,7 +250,7 @@ function buildCallRequestTelegramMessage(body, lastMessage) {
     "",
     "请同事尽快进入 SaleSmartly 后台处理：",
     "",
-    "1. 用 WS名称 或手机号搜索客户",
+    "1. 用搜索关键词搜索客户",
     "2. 判断是否需要人工接入",
     "3. 如适合电话/视频沟通，请人工跟进",
     "4. 如不方便通话，请在聊天中安抚并继续推进下单流程",
@@ -239,18 +258,10 @@ function buildCallRequestTelegramMessage(body, lastMessage) {
 }
 
 function buildAiDoubtTelegramMessage(body, lastMessage) {
-  const contact = valueOrFallback(body.phone || body.email);
-  const aiEmployeeName = getAiEmployeeName(body);
-  const wsDisplayName = getWsDisplayName(body);
-
   return [
     "【客户质疑AI/机器人】",
     "",
-    `AI员工：${aiEmployeeName}`,
-    `WS名称：${wsDisplayName}`,
-    `客户：${valueOrFallback(body.customer_name)}`,
-    `渠道：${valueOrFallback(body.channel)}`,
-    `联系方式：${contact}`,
+    ...buildCommonTopLines(body, lastMessage),
     "",
     "触发原因：客户质疑是否为AI/机器人，需要人工关注",
     "",
@@ -260,28 +271,15 @@ function buildAiDoubtTelegramMessage(body, lastMessage) {
     "会话链接：",
     valueOrFallback(body.conversation_url),
     "",
-    "请同事尽快进入 SaleSmartly 后台处理：",
-    "",
-    "1. 用 WS名称 或手机号搜索客户",
-    "2. 判断客户是否已经产生不信任",
-    "3. 必要时人工接入安抚客户",
-    "4. 回复时避免继续强调 AI 身份，保持自然、专业、真人化沟通",
+    "请同事尽快接入，该场景 AI 不应继续自动回复客户。",
   ].join("\n");
 }
 
 function buildHumanHandoffTelegramMessage(body, lastMessage) {
-  const contact = valueOrFallback(body.phone || body.email);
-  const aiEmployeeName = getAiEmployeeName(body);
-  const wsDisplayName = getWsDisplayName(body);
-
   return [
     "【SaleSmartly 转人工提醒】",
     "",
-    `AI员工：${aiEmployeeName}`,
-    `WS名称：${wsDisplayName}`,
-    `客户：${valueOrFallback(body.customer_name)}`,
-    `渠道：${valueOrFallback(body.channel)}`,
-    `联系方式：${contact}`,
+    ...buildCommonTopLines(body, lastMessage),
     "",
     `触发原因：${valueOrFallback(body.trigger_reason)}`,
     "",
@@ -297,6 +295,22 @@ function buildHumanHandoffTelegramMessage(body, lastMessage) {
     "",
     "请同事尽快进入 SaleSmartly 后台处理。",
   ].join("\n");
+}
+
+function buildTelegramMessage(alertType, body, lastMessage) {
+  if (alertType === "shipping_info") {
+    return buildShippingInfoTelegramMessage(body, lastMessage);
+  }
+
+  if (alertType === "call_request") {
+    return buildCallRequestTelegramMessage(body, lastMessage);
+  }
+
+  if (alertType === "ai_doubt") {
+    return buildAiDoubtTelegramMessage(body, lastMessage);
+  }
+
+  return buildHumanHandoffTelegramMessage(body, lastMessage);
 }
 
 async function sendTelegramMessage(text) {
@@ -332,6 +346,27 @@ async function sendTelegramMessage(text) {
   return data;
 }
 
+function buildSuccessResponse(alertType, telegramResult) {
+  const base = {
+    success: true,
+    ok: true,
+    alert_type: alertType,
+    type: alertType,
+    handoff_required: true,
+    telegram_message_id: telegramResult.result?.message_id,
+  };
+
+  if (alertType === "ai_doubt") {
+    return {
+      ...base,
+      should_reply_customer: false,
+      message: "AI doubt alert sent. Do not auto-reply to customer.",
+    };
+  }
+
+  return base;
+}
+
 module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
@@ -355,37 +390,41 @@ module.exports = async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const lastMessage = getLastMessage(body);
-  let alertType = "human_handoff";
-  let telegramText = buildHumanHandoffTelegramMessage(body, lastMessage);
+  const alertType = detectAlertType(body);
 
-  if (isShippingInfoMessage(lastMessage)) {
-    alertType = "shipping_info";
-    telegramText = buildShippingInfoTelegramMessage(body, lastMessage);
-  } else if (isCallRequestMessage(lastMessage)) {
-    alertType = "call_request";
-    telegramText = buildCallRequestTelegramMessage(body, lastMessage);
-  } else if (isAiDoubtMessage(lastMessage)) {
-    alertType = "ai_doubt";
-    telegramText = buildAiDoubtTelegramMessage(body, lastMessage);
+  if (!alertType) {
+    return res.status(200).json({
+      success: true,
+      skipped: true,
+      reason: "not_a_handoff_trigger",
+    });
   }
+
+  const lastMessage = getLastMessage(body);
+  const enrichedBody = await enrichPayloadWithSalesmartlyProfile(
+    {
+      ...body,
+      phone: firstNonEmpty(body.phone, extractPhoneFromText(lastMessage)),
+      email: firstNonEmpty(body.email, extractEmailFromText(lastMessage)),
+    },
+    lastMessage
+  );
+  const telegramText = buildTelegramMessage(alertType, enrichedBody, lastMessage);
 
   try {
     const telegramResult = await sendTelegramMessage(telegramText);
 
-    return res.status(200).json({
-      ok: true,
-      type: alertType,
-      telegram_message_id: telegramResult.result?.message_id,
-    });
+    return res.status(200).json(buildSuccessResponse(alertType, telegramResult));
   } catch (error) {
     return res.status(502).json({
+      success: false,
       ok: false,
       error: error.message,
     });
   }
 };
 
+module.exports.detectAlertType = detectAlertType;
 module.exports.isShippingInfoMessage = isShippingInfoMessage;
 module.exports.isCallRequestMessage = isCallRequestMessage;
 module.exports.isAiDoubtMessage = isAiDoubtMessage;
