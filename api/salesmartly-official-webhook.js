@@ -3,8 +3,14 @@ const {
   cacheSalesmartlyProfile,
   findDeepValue,
   firstNonEmpty,
+  valueOrFallback,
+  getDisplayName,
+  getContactDisplayValue,
+  getSearchKeyword,
 } = require("../lib/salesmartly-profile");
 const { saveOfficialWebhookEvent } = require("../lib/supabase-store");
+const { isShippingInfoMessage } = require("../lib/followup-rules");
+const { sendTelegramMessage } = require("../lib/telegram");
 
 function normalizeTokenValue(value) {
   if (Array.isArray(value)) {
@@ -149,6 +155,109 @@ function detectMessageDirection(payload = {}, normalized = {}) {
   return normalized.last_message ? "customer" : "system";
 }
 
+function getAiEmployeeName(profile = {}) {
+  return valueOrFallback(
+    profile.ai_employee_name || profile.agent_name || profile.employee_name || profile.staff_name || profile.bot_name
+  );
+}
+
+function getSubmittedCustomerName(text, fallbackName) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n").replace(/\uFF1A/g, ":").trim();
+
+  if (!normalized) {
+    return valueOrFallback(fallbackName);
+  }
+
+  for (const line of normalized.split("\n")) {
+    const labelled = line.match(/^\s*(name|full name|customer name)\s*:?\s*(.+?)\s*$/i);
+    if (labelled?.[2]?.trim()) {
+      return valueOrFallback(labelled[2].trim());
+    }
+
+    const textLine = line.trim();
+    if (
+      /^[a-z][a-z\s.'-]+$/i.test(textLine) &&
+      textLine.split(/\s+/).length >= 2 &&
+      !/\b(usa|united states|canada|uk|address|phone|email|postal|zip|country|region)\b/i.test(textLine)
+    ) {
+      return valueOrFallback(textLine);
+    }
+  }
+
+  return valueOrFallback(fallbackName);
+}
+
+function buildWsOrSearchLine(profile = {}, lastMessage = "") {
+  const wsDisplayName = getDisplayName(profile);
+
+  if (wsDisplayName) {
+    return `WS名称：${wsDisplayName}`;
+  }
+
+  return `搜索关键词：${getSearchKeyword(profile, lastMessage)}`;
+}
+
+function buildOfficialShippingInfoTelegramMessage(profile = {}, lastMessage = "") {
+  return [
+    "【客户已提交收货信息】",
+    "",
+    `AI员工：${getAiEmployeeName(profile)}`,
+    buildWsOrSearchLine(profile, lastMessage),
+    `客户填写姓名：${getSubmittedCustomerName(lastMessage, profile.customer_name)}`,
+    `渠道：${valueOrFallback(profile.channel)}`,
+    `联系方式：${getContactDisplayValue(profile, lastMessage)}`,
+    "",
+    "客户提交内容：",
+    valueOrFallback(lastMessage),
+    "",
+    "会话链接：",
+    valueOrFallback(profile.conversation_url),
+    "",
+    `项目ID：${valueOrFallback(profile.project_id)}`,
+    `客户ID：${valueOrFallback(profile.contact_id)}`,
+    `会话ID：${valueOrFallback(profile.session_id)}`,
+    "",
+    "请同事尽快进入 SaleSmartly 后台处理：",
+    "",
+    "1. 用 WS名称 或手机号搜索客户",
+    "2. 核对客户收货信息",
+    "3. 确认产品和数量",
+    "4. 推进报价 / 付款 / 下单流程",
+  ].join("\n");
+}
+
+async function sendOfficialTelegramAlertIfNeeded(profile = {}, direction = "system") {
+  const lastMessage = valueOrFallback(profile.last_message, "");
+
+  if (direction !== "customer" || !isShippingInfoMessage(lastMessage)) {
+    return {
+      sent: false,
+      reason: "not_shipping_info",
+    };
+  }
+
+  try {
+    const result = await sendTelegramMessage(buildOfficialShippingInfoTelegramMessage(profile, lastMessage));
+
+    return {
+      sent: true,
+      alert_type: "shipping_info",
+      telegram_message_id: result.result?.message_id,
+    };
+  } catch (error) {
+    console.warn("SaleSmartly official webhook Telegram alert failed", {
+      alert_type: "shipping_info",
+      error: error.message,
+    });
+
+    return {
+      sent: false,
+      alert_type: "shipping_info",
+      error: error.message,
+    };
+  }
+}
+
 module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
@@ -184,6 +293,7 @@ module.exports = async function handler(req, res) {
     saved: false,
     reason: error.message,
   }));
+  const telegramAlert = await sendOfficialTelegramAlertIfNeeded(storedProfile, direction);
 
   return res.status(200).json({
     success: true,
@@ -191,6 +301,7 @@ module.exports = async function handler(req, res) {
     cached: true,
     saved: Boolean(storeResult.saved),
     save_reason: storeResult.saved ? undefined : storeResult.reason,
+    telegram_alert: telegramAlert,
     event_type: normalized.event_type || "unknown",
     direction,
     profile: {
