@@ -152,6 +152,12 @@ Header: x-salesmartly-webhook-token = <SALES_SMARTLY_WEBHOOK_TOKEN>
 Events: new message notification, customer information sync
 ```
 
+If SaleSmartly webhook token validation fails, use the shared secret fallback URL:
+
+```text
+https://wukai8775-max-salesmartly-telegram.vercel.app/api/salesmartly-official-webhook?secret=<SALES_SMARTLY_WEBHOOK_SECRET>
+```
+
 The receiver extracts and stores:
 
 ```text
