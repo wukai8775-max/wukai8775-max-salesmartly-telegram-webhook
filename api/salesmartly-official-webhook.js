@@ -6,42 +6,92 @@ const {
 } = require("../lib/salesmartly-profile");
 const { saveOfficialWebhookEvent } = require("../lib/supabase-store");
 
-function getOfficialWebhookToken(req) {
-  const authHeader = req.headers.authorization || "";
+function normalizeTokenValue(value) {
+  if (Array.isArray(value)) {
+    return normalizeTokenValue(value[0]);
+  }
 
-  return (
-    req.headers["x-salesmartly-webhook-token"] ||
-    req.headers["x-webhook-token"] ||
-    req.headers["x-salesmartly-token"] ||
-    req.headers["x-salesmartly-webhook-secret"] ||
-    req.headers.token ||
-    authHeader.replace(/^Bearer\s+/i, "") ||
-    req.query?.token ||
-    req.query?.secret
-  );
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+function getBodyKeyNames(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return [];
+  }
+
+  return Object.keys(body);
+}
+
+function getOfficialWebhookTokenCandidates(req) {
+  const authHeader = normalizeTokenValue(req.headers.authorization);
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+
+  return [
+    req.headers["x-salesmartly-webhook-token"],
+    req.headers["x-salesmartly-signature"],
+    req.headers.signature,
+    req.headers["external-sign"],
+    req.headers["x-webhook-token"],
+    req.headers["x-salesmartly-token"],
+    req.headers["x-salesmartly-webhook-secret"],
+    req.headers.token,
+    authHeader.replace(/^Bearer\s+/i, ""),
+    req.query?.secret,
+    req.query?.token,
+    body.token,
+    body.signature,
+    body.webhook_token,
+  ]
+    .map(normalizeTokenValue)
+    .filter(Boolean);
+}
+
+function logOfficialWebhookAuthFailure(req) {
+  console.warn("SaleSmartly official webhook auth failed", {
+    received_header_names: Object.keys(req.headers || {}),
+    query_key_names: Object.keys(req.query || {}),
+    body_top_level_key_names: getBodyKeyNames(req.body),
+    SALES_SMARTLY_WEBHOOK_TOKEN_exists: Boolean(process.env.SALES_SMARTLY_WEBHOOK_TOKEN),
+    SALES_SMARTLY_WEBHOOK_SECRET_exists: Boolean(process.env.SALES_SMARTLY_WEBHOOK_SECRET),
+  });
 }
 
 function verifyOfficialWebhookToken(req) {
   const expectedToken = process.env.SALES_SMARTLY_WEBHOOK_TOKEN;
+  const expectedSecret = process.env.SALES_SMARTLY_WEBHOOK_SECRET;
+  const tokenCandidates = getOfficialWebhookTokenCandidates(req);
+  const querySecret = normalizeTokenValue(req.query?.secret);
 
-  if (!expectedToken) {
+  if (!expectedToken && !expectedSecret) {
     return {
       ok: false,
       status: 500,
-      error: "Missing SALES_SMARTLY_WEBHOOK_TOKEN",
+      error: "Missing SALES_SMARTLY_WEBHOOK_TOKEN or SALES_SMARTLY_WEBHOOK_SECRET",
     };
   }
 
-  if (getOfficialWebhookToken(req) !== expectedToken) {
+  if (expectedToken && tokenCandidates.includes(expectedToken)) {
     return {
-      ok: false,
-      status: 401,
-      error: "Invalid SaleSmartly webhook token",
+      ok: true,
     };
   }
+
+  if (expectedSecret && querySecret === expectedSecret) {
+    return {
+      ok: true,
+    };
+  }
+
+  logOfficialWebhookAuthFailure(req);
 
   return {
-    ok: true,
+    ok: false,
+    status: 401,
+    error: "Invalid SaleSmartly webhook token",
   };
 }
 
