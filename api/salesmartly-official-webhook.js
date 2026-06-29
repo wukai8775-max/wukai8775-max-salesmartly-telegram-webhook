@@ -10,8 +10,14 @@ const {
   extractPhoneFromText,
   extractEmailFromText,
 } = require("../lib/salesmartly-profile");
-const { saveOfficialWebhookEvent } = require("../lib/supabase-store");
+const {
+  saveOfficialWebhookEvent,
+  updateCustomerByIdentity,
+  markPendingTasksSkipped,
+  insertFollowupLog,
+} = require("../lib/supabase-store");
 const { sendTelegramMessage } = require("../lib/telegram");
+const { isOptOutMessage } = require("../lib/followup-rules");
 
 function normalizeTokenValue(value) {
   if (Array.isArray(value)) {
@@ -335,6 +341,103 @@ async function sendOfficialTelegramAlertIfNeeded(profile = {}, direction = "syst
   }
 }
 
+async function stopFollowupIfCustomerOptedOut(profile = {}, direction = "system") {
+  const lastMessage = valueOrFallback(profile.last_message, "");
+
+  if (direction !== "customer" || !isOptOutMessage(lastMessage)) {
+    return {
+      stopped: false,
+      reason: "not_opt_out",
+    };
+  }
+
+  if (!profile.contact_id && !profile.session_id) {
+    return {
+      stopped: false,
+      reason: "missing_customer_identity",
+    };
+  }
+
+  try {
+    await updateCustomerByIdentity(profile, {
+      current_status: "opt_out",
+      risk_level: "high",
+      followup_stopped: true,
+      followup_stop_reason: "customer_opt_out",
+      do_not_followup: true,
+    });
+    await markPendingTasksSkipped(profile, "customer_opt_out");
+    await insertFollowupLog({
+      contact_id: profile.contact_id,
+      session_id: profile.session_id,
+      action_type: "skipped",
+      status: "opt_out",
+      reason: "customer_opt_out",
+      raw_result: {
+        source: "salesmartly_official_webhook",
+        last_customer_message: lastMessage,
+      },
+    });
+
+    return {
+      stopped: true,
+      reason: "customer_opt_out",
+    };
+  } catch (error) {
+    console.warn("SaleSmartly official webhook opt-out handling failed", {
+      error: error.message,
+    });
+
+    return {
+      stopped: false,
+      reason: "customer_opt_out_update_failed",
+      error: error.message,
+    };
+  }
+}
+
+async function handleOfficialWebhookBusiness(req, res) {
+  const payload = req.body || {};
+  const normalized = normalizeOfficialPayload(payload);
+  const cachedProfile = cacheSalesmartlyProfile(normalized);
+  const direction = detectMessageDirection(payload, normalized);
+  const storedProfile = {
+    ...normalized,
+    ...cachedProfile,
+  };
+  const storeResult = await saveOfficialWebhookEvent(storedProfile, payload, direction).catch((error) => ({
+    saved: false,
+    reason: error.message,
+  }));
+  const followupStop = await stopFollowupIfCustomerOptedOut(storedProfile, direction);
+  const telegramAlert = await sendOfficialTelegramAlertIfNeeded(storedProfile, direction);
+
+  return res.status(200).json({
+    success: true,
+    ok: true,
+    cached: true,
+    saved: Boolean(storeResult.saved),
+    save_reason: storeResult.saved ? undefined : storeResult.reason,
+    followup_stop: followupStop,
+    telegram_alert: telegramAlert,
+    event_type: normalized.event_type || "unknown",
+    direction,
+    profile: {
+      ws_display_name: cachedProfile.ws_display_name || "",
+      customer_name: cachedProfile.customer_name || "",
+      phone: cachedProfile.phone || "",
+      email: cachedProfile.email || "",
+      channel: cachedProfile.channel || "",
+      contact_id: cachedProfile.contact_id || "",
+      session_id: cachedProfile.session_id || "",
+      project_id: cachedProfile.project_id || "",
+      conversation_url: cachedProfile.conversation_url || "",
+      last_message: cachedProfile.last_message || "",
+      message_time: normalized.message_time || "",
+    },
+  });
+}
+
 module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
@@ -358,41 +461,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const payload = req.body || {};
-  const normalized = normalizeOfficialPayload(payload);
-  const cachedProfile = cacheSalesmartlyProfile(normalized);
-  const direction = detectMessageDirection(payload, normalized);
-  const storedProfile = {
-    ...normalized,
-    ...cachedProfile,
-  };
-  const storeResult = await saveOfficialWebhookEvent(storedProfile, payload, direction).catch((error) => ({
-    saved: false,
-    reason: error.message,
-  }));
-  const telegramAlert = await sendOfficialTelegramAlertIfNeeded(storedProfile, direction);
-
-  return res.status(200).json({
-    success: true,
-    ok: true,
-    cached: true,
-    saved: Boolean(storeResult.saved),
-    save_reason: storeResult.saved ? undefined : storeResult.reason,
-    telegram_alert: telegramAlert,
-    event_type: normalized.event_type || "unknown",
-    direction,
-    profile: {
-      ws_display_name: cachedProfile.ws_display_name || "",
-      customer_name: cachedProfile.customer_name || "",
-      phone: cachedProfile.phone || "",
-      email: cachedProfile.email || "",
-      channel: cachedProfile.channel || "",
-      contact_id: cachedProfile.contact_id || "",
-      session_id: cachedProfile.session_id || "",
-      project_id: cachedProfile.project_id || "",
-      conversation_url: cachedProfile.conversation_url || "",
-      last_message: cachedProfile.last_message || "",
-      message_time: normalized.message_time || "",
-    },
-  });
+  return handleOfficialWebhookBusiness(req, res);
 };
+
+module.exports.handleOfficialWebhookBusiness = handleOfficialWebhookBusiness;
