@@ -175,6 +175,8 @@ direction
 raw_payload
 ```
 
+When the official webhook receives a customer message that looks like submitted shipping information, it also sends the Telegram alert `【客户已提交收货信息】`. This covers both labelled formats such as `Name: / Phone: / Address:` and multi-line customer replies such as name, phone, country, street address, zip code, and email without labels.
+
 ## HelpKnow Telegram Webhook
 
 ```text
