@@ -68,6 +68,11 @@ function getLimit(req) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 50;
 }
 
+function isForceEnabled(req) {
+  const raw = firstNonEmpty(req.body?.force, req.query?.force);
+  return ["1", "true", "yes", "y"].includes(String(raw).toLowerCase());
+}
+
 function getCustomerLabel(customer = {}) {
   return firstNonEmpty(getDisplayName(customer), customer.customer_name, customer.phone, customer.email, "未提供");
 }
@@ -116,11 +121,14 @@ function inferAnalysisReason(status = "", recentText = "") {
 
   const byStatus = {
     price_requested: "客户在看价格、目录或报价信息，可能还没确定目标产品和预算。",
+    price_list_requested: "客户在索要价格表、目录或产品清单，需要人工根据目标和预算引导客户缩小选择范围。",
     quote_sent_no_reply: "客户已收到报价但没有继续回复，可能卡在总价、MOQ、运费或首次测试成本。",
     payment_interest_no_reply: "客户问过付款方式后没有继续，可能在评估付款安全性或流程。",
     shipping_question_no_reply: "客户问过物流后没有继续，可能在担心运费、时效、追踪或清关。",
     later_followup: "客户表示稍后再看或需要考虑，需要人工轻量跟进客户当前卡点。",
     high_intent_no_reply: "客户表达过下单意向但没有继续确认，可能卡在付款、收货信息、总价或信任问题。",
+    price_objection: "客户认为价格偏高或正在比较其他报价，需要人工解释订单组成并判断是否适合小单测试。",
+    product_question_no_reply: "客户在询问是否有某类产品或剂型，需要人工确认具体需求后再给出产品方向。",
   };
 
   return byStatus[status] || "客户进入可回访阶段，但需要人工先查看上下文再决定是否发送。";
@@ -407,6 +415,7 @@ async function processCustomer(customer, options = {}) {
     logs,
     tasks,
     now,
+    force: options.force,
   });
 
   if (decision.customer_replied_after_last_followup_reminder || decision.customer_replied_after_last_auto_followup) {
@@ -461,6 +470,7 @@ module.exports = async function handler(req, res) {
   }
 
   const limit = getLimit(req);
+  const force = isForceEnabled(req);
 
   try {
     const customers = await listCustomersForAnalysis(limit);
@@ -481,6 +491,7 @@ module.exports = async function handler(req, res) {
       try {
         const result = await processCustomer(customer, {
           now: req.body?.now || req.query?.now,
+          force,
         });
 
         if (result.telegram_sent) {
@@ -518,6 +529,7 @@ module.exports = async function handler(req, res) {
       success: true,
       mode: FOLLOWUP_MODE,
       auto_customer_send_disabled: AUTO_CUSTOMER_SEND_DISABLED,
+      force,
       scanned: customers.length,
       telegram_alerts_created: summary.telegram_alerts_created,
       tasks_created: summary.tasks_created,
@@ -531,6 +543,7 @@ module.exports = async function handler(req, res) {
       success: false,
       mode: FOLLOWUP_MODE,
       auto_customer_send_disabled: AUTO_CUSTOMER_SEND_DISABLED,
+      force: isForceEnabled(req),
       scanned: 0,
       telegram_alerts_created: 0,
       tasks_created: 0,
