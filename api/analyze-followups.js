@@ -87,7 +87,8 @@ function getContactLine(customer = {}) {
 }
 
 function getReminderSearchKeyword(customer = {}) {
-  return getSearchKeyword(customer, customer.last_customer_message);
+  const keyword = getSearchKeyword(customer, customer.last_customer_message);
+  return keyword && keyword !== "未获取到" ? keyword : firstNonEmpty(customer.contact_id, customer.session_id, "未获取到");
 }
 
 function inferAnalysisReason(status = "", recentText = "") {
