@@ -52,6 +52,7 @@ SALES_SMARTLY_WEBHOOK_SECRET=
 Optional:
 
 ```text
+TELEGRAM_FOLLOWUP_CHAT_ID=
 SALES_SMARTLY_PROJECT_ID=
 CRON_SECRET=
 SALESMARTLY_SEND_MESSAGE_URL=
@@ -65,6 +66,8 @@ AUTO_FOLLOWUP_ENABLED=false
 ```
 
 `FOLLOWUP_MODE=telegram_only` has highest priority. Even if `AUTO_FOLLOWUP_ENABLED=true` exists in Vercel, `/api/analyze-followups` will not call the SaleSmartly active-send API and will not send customer-facing messages.
+
+If `TELEGRAM_FOLLOWUP_CHAT_ID` is configured, AI follow-up reminders use that Telegram group. Emergency handoff alerts and SaleSmartly/HelpKnow alerts continue to use `TELEGRAM_CHAT_ID`.
 
 ## Supabase SQL
 
