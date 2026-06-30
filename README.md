@@ -1,6 +1,15 @@
 # SaleSmartly / HelpKnow / Telegram Webhook
 
-Vercel Serverless API for SaleSmartly and HelpKnow. It can receive HelpKnow webhook calls, receive official SaleSmartly webhook events, send Telegram handoff alerts, store customer chats in Supabase, analyze low-risk sales follow-up cases, and create or send English customer follow-up messages.
+Vercel Serverless API for SaleSmartly and HelpKnow. It can:
+
+- receive HelpKnow webhook calls and send Telegram handoff alerts;
+- receive official SaleSmartly webhook events and store customer/message data in Supabase;
+- analyze customer conversations and detect follow-up opportunities;
+- create follow-up tasks and send Telegram reminders for human sales staff.
+
+Current mode: **AI analysis + Telegram human follow-up reminders**.
+
+The system does **not** automatically send any message to SaleSmartly customers. HelpKnow / Omen / Jett continue handling normal customer replies.
 
 ## Endpoints
 
@@ -26,6 +35,7 @@ POST /api/debug-supabase-insert
 Configure these in Vercel. Do not commit real values.
 
 ```text
+FOLLOWUP_MODE=telegram_only
 AUTO_FOLLOWUP_ENABLED=false
 
 SUPABASE_URL=
@@ -47,17 +57,14 @@ CRON_SECRET=
 SALESMARTLY_SEND_MESSAGE_URL=
 ```
 
-Initial production setting should stay disabled until testing is complete:
+Initial production setting should be:
 
 ```text
+FOLLOWUP_MODE=telegram_only
 AUTO_FOLLOWUP_ENABLED=false
 ```
 
-With this setting the system creates `followup_tasks` and sends internal Telegram reminders, but does not send customer-facing messages. To enable automatic customer messages later:
-
-```text
-AUTO_FOLLOWUP_ENABLED=true
-```
+`FOLLOWUP_MODE=telegram_only` has highest priority. Even if `AUTO_FOLLOWUP_ENABLED=true` exists in Vercel, `/api/analyze-followups` will not call the SaleSmartly active-send API and will not send customer-facing messages.
 
 ## Supabase SQL
 
@@ -161,7 +168,7 @@ If SaleSmartly webhook token validation fails, use the shared secret fallback UR
 https://wukai8775-max-salesmartly-telegram.vercel.app/api/salesmartly-official-webhook?secret=<SALES_SMARTLY_WEBHOOK_SECRET>
 ```
 
-If SaleSmartly official webhook token validation keeps returning `POST 401`, configure the SaleSmartly enterprise developer webhook push URL as:
+If SaleSmartly official webhook token validation still keeps returning `POST 401`, use the dedicated no-token receiver in the SaleSmartly enterprise developer webhook settings:
 
 ```text
 URL: https://wukai8775-max-salesmartly-telegram.vercel.app/api/salesmartly-official-webhook-yuan-alert
@@ -197,7 +204,7 @@ Method: POST
 Header: x-salesmartly-webhook-secret = <SALES_SMARTLY_WEBHOOK_SECRET>
 ```
 
-Only these high-risk handoff cases send Telegram immediately:
+Only these high-risk handoff cases send Telegram:
 
 ```text
 shipping_info
@@ -224,9 +231,17 @@ For `ai_doubt`, the response includes:
 }
 ```
 
-## Automatic Follow-Up Rules
+## AI Analysis + Telegram Follow-Up Reminders
 
-Allowed low-risk auto-send statuses:
+Current workflow:
+
+```text
+SaleSmartly -> Vercel -> Supabase -> /api/analyze-followups -> Telegram group reminder -> human follow-up
+```
+
+`/api/analyze-followups` only reads Supabase conversation data, creates `followup_tasks`, writes `followup_logs`, and sends Telegram reminders. It never sends messages to customers.
+
+Low-risk reminder statuses:
 
 ```text
 price_requested
@@ -234,9 +249,10 @@ quote_sent_no_reply
 payment_interest_no_reply
 shipping_question_no_reply
 later_followup
+high_intent_no_reply
 ```
 
-Forbidden auto-send scenarios. These only create Telegram handoff alerts:
+High-risk scenarios. These only create Telegram `【需要人工接入】` alerts:
 
 ```text
 ai_doubt
@@ -262,45 +278,73 @@ leave me alone
 don't contact me again
 ```
 
-Follow-up cadence:
+Telegram reminder cadence:
 
 ```text
-New customer within 24h:
 3h after last customer message
 6h after last customer message
 9h after last customer message
-
-After 24h:
-24h after first customer message
-48h after first customer message
-72h after first customer message
+24h after last customer message
+48h after last customer message
+72h after last customer message
 ```
 
 Duplicate prevention:
 
-- one `contact_id` / `session_id` cannot receive the same stage twice;
-- `followup_logs` are checked before sending;
+- one `contact_id` / `session_id` cannot create the same stage reminder twice;
+- `followup_logs.action_type=telegram_alert` and sent `followup_tasks` are checked before alerting;
 - pending tasks are reused instead of recreated;
-- if the customer replies after an auto follow-up, pending tasks are skipped and the latest customer message is analyzed again.
+- if the customer replies after a Telegram reminder, pending tasks are skipped and the latest customer message is analyzed again;
+- after the 72h reminder, the customer is marked `followup_stopped=true` with `followup_stop_reason=no_reply_after_3_days`.
 
-Message safety rules:
+Reminder safety rules:
 
-- customer-facing follow-ups are English only;
-- do not mention AI or automation;
+- suggested human follow-up scripts are English only;
+- do not mention AI or automation in suggested customer-facing text;
 - do not provide dosage, injection, treatment, or medical advice;
 - do not invent price, stock, COA, shipping time, or payment links;
-- follow-up should solve the customer's blocker, not pressure payment.
+- reminders help staff solve the customer's blocker, not pressure payment.
 
-## SaleSmartly Message Sending
-
-The sender uses official active-send webhook format:
+Telegram reminder format for low-risk cases:
 
 ```text
-POST https://webhook.salesmartly.com/{channel}/send?signature=<SALES_SMARTLY_WEBHOOK_TOKEN>
-Body: chat_user_id, chat_session_id, msg_type=text, msg.text, send_time
+【客户回访提醒】
+
+客户阶段：{status}
+回访节点：{followup_stage}
+优先级：高 / 中 / 低
+
+WS名称：{ws_display_name, if available}
+客户名称：{customer_name, if available}
+联系方式：{phone/email, if available}
+搜索关键词：{ws_display_name or customer_name or phone or email or contact_id}
+
+客户最近消息：
+{last_customer_message}
+
+AI分析：
+{reason}
+
+建议人工回访话术：
+{English suggested message}
+
+操作建议：
+请人工进入 SaleSmartly，使用“搜索关键词”找到该客户，确认上下文后再手动发送，不要盲目复制。
 ```
 
-The code also generates `external-sign` from `SALES_SMARTLY_API_TOKEN` and request parameters. If SaleSmartly provides a different dedicated send endpoint for your account, set:
+High-risk Telegram title:
+
+```text
+【需要人工接入】
+```
+
+## SaleSmartly Message Sending Module
+
+`lib/salesmartly-send.js` is retained for reference, but `/api/analyze-followups` does not import it and does not call it.
+
+In `FOLLOWUP_MODE=telegram_only`, the system will not call any SaleSmartly active-send endpoint, regardless of `AUTO_FOLLOWUP_ENABLED`.
+
+The optional variable below is not used by the current Telegram-only reminder flow:
 
 ```text
 SALESMARTLY_SEND_MESSAGE_URL=
@@ -317,21 +361,28 @@ curl -X POST "https://your-domain.vercel.app/api/analyze-followups" \
   --data-raw '{"limit":50}'
 ```
 
-With `AUTO_FOLLOWUP_ENABLED=false`, expected behavior:
+Expected behavior in current `telegram_only` mode:
 
 - analyze customers;
 - create `followup_tasks`;
-- write `followup_logs`;
-- send internal Telegram reminder;
-- do not send customer-facing messages.
+- write `followup_logs` with `telegram_alert` or `skipped`;
+- send Telegram `【客户回访提醒】` for low-risk follow-up opportunities;
+- send Telegram `【需要人工接入】` for high-risk cases;
+- never send customer-facing messages.
 
-With `AUTO_FOLLOWUP_ENABLED=true`, expected behavior:
+Response fields include:
 
-- recheck customer reply status;
-- skip high-risk cases;
-- send eligible English follow-up to SaleSmartly;
-- write `auto_sent` log;
-- send Telegram internal record `【自动回访已发送】`.
+```json
+{
+  "mode": "telegram_only",
+  "auto_customer_send_disabled": true,
+  "scanned": 0,
+  "telegram_alerts_created": 0,
+  "tasks_created": 0,
+  "skipped": 0,
+  "errors": 0
+}
+```
 
 ## Vercel Cron
 
@@ -389,10 +440,25 @@ Expected:
 
 ```json
 {
+  "mode": "telegram_only",
+  "auto_customer_send_disabled": true,
+  "would_send_customer": false,
   "status_detected": "price_requested",
-  "auto_send_allowed": true,
+  "telegram_alert_allowed": true,
+  "auto_send_allowed": false,
   "followup_stage": "3h"
 }
+```
+
+Built-in scenario tests:
+
+```bash
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_inquiry"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=opt_out"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=duplicate_stage"
 ```
 
 High-risk test:
@@ -424,7 +490,11 @@ Expected:
 
 ```json
 {
+  "mode": "telegram_only",
+  "auto_customer_send_disabled": true,
+  "would_send_customer": false,
   "high_risk_type": "ai_doubt",
+  "manual_handoff_required": true,
   "auto_send_allowed": false,
   "skipped_reason": "high_risk_handoff_required"
 }
@@ -453,7 +523,7 @@ curl -X POST "https://your-domain.vercel.app/api/test-followup-analysis" \
     ],
     "logs": [
       {
-        "action_type": "auto_sent",
+        "action_type": "telegram_alert",
         "followup_stage": "3h",
         "created_at": "2026-06-29T11:05:00.000Z"
       }
@@ -462,7 +532,7 @@ curl -X POST "https://your-domain.vercel.app/api/test-followup-analysis" \
   }'
 ```
 
-Expected: it should not send `3h` again.
+Expected: it should not create the `3h` Telegram reminder again and `would_send_customer` remains `false`.
 
 ## Debug Supabase Insert
 
