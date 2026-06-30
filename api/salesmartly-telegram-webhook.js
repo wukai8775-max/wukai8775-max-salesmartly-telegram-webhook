@@ -14,7 +14,7 @@ const {
   isAiDoubtMessage,
 } = require("../lib/followup-rules");
 const { sendTelegramMessage } = require("../lib/telegram");
-const { getAssignedStaffName } = require("../lib/staff-profile");
+const { getAssignedStaffName, getAssignedStaffId } = require("../lib/staff-profile");
 
 function getLastMessage(body) {
   return valueOrFallback(body.last_message || body.message || body.content, "");
@@ -26,13 +26,22 @@ function getAiEmployeeName(body) {
   );
 }
 
-function getStaffName(body) {
-  return getAssignedStaffName({
+function getStaffProfile(body) {
+  return {
     ...body,
     assigned_staff_name: firstNonEmpty(body.assigned_staff_name, body.staff_name),
+    assigned_staff_id: firstNonEmpty(body.assigned_staff_id, body.staff_id, body.agent_id, body.operator_id),
     assigned_ai_employee: firstNonEmpty(body.assigned_ai_employee, getAiEmployeeName(body)),
     last_agent_sender_name: firstNonEmpty(body.last_agent_sender_name, body.sender_name),
-  });
+  };
+}
+
+function getStaffName(body) {
+  return getAssignedStaffName(getStaffProfile(body));
+}
+
+function getStaffId(body) {
+  return getAssignedStaffId(getStaffProfile(body));
 }
 
 function getSubmittedCustomerName(text, fallbackName) {
@@ -109,6 +118,7 @@ function buildWsOrSearchLine(body, lastMessage) {
 function buildCommonTopLines(body, lastMessage, options = {}) {
   const lines = [
     `接待客服：${getStaffName(body)}`,
+    `接待客服ID：${getStaffId(body)}`,
     buildWsOrSearchLine(body, lastMessage),
   ];
 
