@@ -68,6 +68,7 @@ module.exports = async function handler(req, res) {
     customer_error: result.customer_error || "",
     message_error: result.message_error || "",
     reason: result.reason || "",
+    supabase_key_role: result.supabase_key_role || "",
     debug_contact_id: profile.contact_id,
     debug_session_id: profile.session_id,
   });
