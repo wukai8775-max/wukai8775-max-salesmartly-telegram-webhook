@@ -1,5 +1,5 @@
 const { analyzeFollowupDecision, classifyCustomerStatus, getHighRiskType } = require("../lib/followup-rules");
-const { getAssignedStaffName } = require("../lib/staff-profile");
+const { getAssignedStaffName, getAssignedStaffId } = require("../lib/staff-profile");
 
 const FOLLOWUP_MODE = "telegram_only";
 const AUTO_CUSTOMER_SEND_DISABLED = true;
@@ -20,6 +20,8 @@ function sampleCustomer(now = new Date().toISOString(), lastMessage = "Can I get
     phone: "+1 000 000 0000",
     email: "",
     channel: "WhatsApp",
+    assigned_staff_name: "Omen",
+    assigned_staff_id: "test_staff_id",
     first_customer_message_at: first,
     last_customer_message_at: first,
     last_customer_message: lastMessage,
@@ -111,6 +113,9 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
           session_id: customer.session_id,
           direction: "ai",
           sender_name: "Omen",
+          raw_payload: {
+            sys_user_id: "test_staff_id",
+          },
           message_text: "Here is your quote. Product total is $364, shipping is $70, total amount is $455.70.",
           message_time: quoteAt,
         },
@@ -216,6 +221,7 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false }) 
     opt_out_stopped: decision.stop_reason === "customer_opt_out",
     auto_send_allowed: false,
     staff_name: getAssignedStaffName(customer, messages),
+    staff_id: getAssignedStaffId(customer, messages),
     followup_stage: decision.followup_stage || null,
     suggested_message: decision.suggested_message || "",
     skipped_reason: decision.skipped_reason || "",
