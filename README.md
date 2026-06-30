@@ -17,6 +17,8 @@ POST /api/analyze-followups
 
 GET  /api/test-followup-analysis
 POST /api/test-followup-analysis
+
+POST /api/debug-supabase-insert
 ```
 
 ## Environment Variables
@@ -461,6 +463,27 @@ curl -X POST "https://your-domain.vercel.app/api/test-followup-analysis" \
 ```
 
 Expected: it should not send `3h` again.
+
+## Debug Supabase Insert
+
+Use this endpoint to verify that Vercel can write to Supabase with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+
+```bash
+curl -X POST "https://your-domain.vercel.app/api/debug-supabase-insert" \
+  -H "Content-Type: application/json" \
+  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
+  --data-raw '{}'
+```
+
+Expected:
+
+```json
+{
+  "ok": true,
+  "customer_success": true,
+  "message_success": true
+}
+```
 
 ## Official Docs Used
 
