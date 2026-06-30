@@ -245,11 +245,25 @@ Low-risk reminder statuses:
 
 ```text
 price_requested
+price_list_requested
 quote_sent_no_reply
 payment_interest_no_reply
 shipping_question_no_reply
 later_followup
 high_intent_no_reply
+price_objection
+product_question_no_reply
+```
+
+Examples that are treated as low-risk Telegram reminder candidates:
+
+```text
+Can I get a price quote?
+can i have a price list?
+Can I see your catalog
+Pricing, delivery
+Your prices are very high compared to the ...
+Do you carry pills and oils also?
 ```
 
 High-risk scenarios. These only create Telegram `【需要人工接入】` alerts:
@@ -384,6 +398,24 @@ Response fields include:
 }
 ```
 
+`status_not_reminder_allowed` means the latest customer message did not match a supported low-risk follow-up status and did not match a high-risk handoff status. It should not be returned for clear price, quote, price list, catalog, shipping/delivery, price objection, or product-question messages.
+
+Force a Telegram-only test run:
+
+```bash
+curl -X POST "https://your-domain.vercel.app/api/analyze-followups?force=true" \
+  -H "Content-Type: application/json" \
+  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
+  --data-raw '{"limit":50}'
+```
+
+With `force=true`:
+
+- low-risk customers ignore the 3h / 6h / 9h / 24h timing gate and immediately use the first unsent reminder node;
+- duplicate stage protection still applies;
+- high-risk customers still only create `【需要人工接入】`;
+- the system still never sends messages to SaleSmartly customers.
+
 ## Vercel Cron
 
 Recommended schedule: once per hour.
@@ -454,11 +486,17 @@ Built-in scenario tests:
 
 ```bash
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_inquiry"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_quote"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=catalog_request"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=pricing_delivery"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_objection"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=product_question"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=opt_out"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=duplicate_stage"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=catalog_request&force=true"
 ```
 
 High-risk test:
