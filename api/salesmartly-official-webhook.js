@@ -12,12 +12,14 @@ const {
 } = require("../lib/salesmartly-profile");
 const {
   saveOfficialWebhookEvent,
+  getMessagesForCustomer,
   updateCustomerByIdentity,
   markPendingTasksSkipped,
   insertFollowupLog,
 } = require("../lib/supabase-store");
 const { sendTelegramMessage } = require("../lib/telegram");
 const { isOptOutMessage } = require("../lib/followup-rules");
+const { getAssignedStaffName } = require("../lib/staff-profile");
 
 function normalizeTokenValue(value) {
   if (Array.isArray(value)) {
@@ -280,11 +282,11 @@ function buildWsOrSearchLine(profile = {}, lastMessage = "") {
   return `搜索关键词：${getSearchKeyword(profile, lastMessage)}`;
 }
 
-function buildOfficialShippingInfoTelegramMessage(profile = {}, lastMessage = "") {
+function buildOfficialShippingInfoTelegramMessage(profile = {}, lastMessage = "", messages = []) {
   return [
     "【客户已提交收货信息】",
     "",
-    `AI员工：${getAiEmployeeName(profile)}`,
+    `接待客服：${getAssignedStaffName(profile, messages)}`,
     buildWsOrSearchLine(profile, lastMessage),
     `客户填写姓名：${getSubmittedCustomerName(lastMessage, profile.customer_name)}`,
     `渠道：${valueOrFallback(profile.channel)}`,
@@ -309,7 +311,7 @@ function buildOfficialShippingInfoTelegramMessage(profile = {}, lastMessage = ""
   ].join("\n");
 }
 
-async function sendOfficialTelegramAlertIfNeeded(profile = {}, direction = "system") {
+async function sendOfficialTelegramAlertIfNeeded(profile = {}, direction = "system", messages = []) {
   const lastMessage = valueOrFallback(profile.last_message, "");
 
   if (direction !== "customer" || !isOfficialShippingInfoMessage(lastMessage)) {
@@ -320,7 +322,7 @@ async function sendOfficialTelegramAlertIfNeeded(profile = {}, direction = "syst
   }
 
   try {
-    const result = await sendTelegramMessage(buildOfficialShippingInfoTelegramMessage(profile, lastMessage));
+    const result = await sendTelegramMessage(buildOfficialShippingInfoTelegramMessage(profile, lastMessage, messages));
 
     return {
       sent: true,
@@ -409,8 +411,19 @@ async function handleOfficialWebhookBusiness(req, res) {
     saved: false,
     reason: error.message,
   }));
-  const followupStop = await stopFollowupIfCustomerOptedOut(storedProfile, direction);
-  const telegramAlert = await sendOfficialTelegramAlertIfNeeded(storedProfile, direction);
+  const alertProfile = {
+    ...storedProfile,
+    ...(storeResult.customer || {}),
+  };
+  const recentMessages = await getMessagesForCustomer(alertProfile, 30).catch((error) => {
+    console.warn("SaleSmartly official webhook staff lookup failed", {
+      error: error.message,
+    });
+    return [];
+  });
+  const staffName = getAssignedStaffName(alertProfile, recentMessages);
+  const followupStop = await stopFollowupIfCustomerOptedOut(alertProfile, direction);
+  const telegramAlert = await sendOfficialTelegramAlertIfNeeded(alertProfile, direction, recentMessages);
 
   return res.status(200).json({
     success: true,
@@ -434,6 +447,7 @@ async function handleOfficialWebhookBusiness(req, res) {
       conversation_url: cachedProfile.conversation_url || "",
       last_message: cachedProfile.last_message || "",
       message_time: normalized.message_time || "",
+      staff_name: staffName,
     },
   });
 }
