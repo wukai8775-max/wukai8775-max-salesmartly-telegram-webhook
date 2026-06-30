@@ -198,7 +198,7 @@ function buildHumanHandoffTelegramMessage(customer = {}, decision = {}, messages
 
 async function sendTelegramSafely(text) {
   try {
-    const result = await sendTelegramMessage(text);
+    const result = await sendTelegramMessage(text, { purpose: "followup" });
     return {
       success: true,
       result,
