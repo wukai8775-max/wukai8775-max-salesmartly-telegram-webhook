@@ -85,6 +85,9 @@ create table if not exists customers (
   channel text,
   conversation_url text,
   assigned_ai_employee text,
+  assigned_staff_name text,
+  assigned_staff_id text,
+  last_agent_sender_name text,
   first_customer_message_at timestamptz,
   last_customer_message text,
   last_customer_message_at timestamptz,
@@ -151,6 +154,14 @@ create index if not exists idx_followup_tasks_contact_stage on followup_tasks(co
 create index if not exists idx_followup_logs_contact_stage on followup_logs(contact_id, followup_stage, action_type);
 ```
 
+If your `customers` table already exists, run this upgrade SQL once:
+
+```sql
+alter table customers add column if not exists assigned_staff_name text;
+alter table customers add column if not exists assigned_staff_id text;
+alter table customers add column if not exists last_agent_sender_name text;
+```
+
 ## SaleSmartly Official Webhook
 
 Configure SaleSmartly enterprise developer webhook:
@@ -188,6 +199,9 @@ contact_id
 session_id
 project_id
 conversation_url
+assigned_staff_name / assigned_staff_id
+assigned_ai_employee
+last_agent_sender_name
 last_message
 message_time
 direction
@@ -327,6 +341,7 @@ Telegram reminder format for low-risk cases:
 客户阶段：{status}
 回访节点：{followup_stage}
 优先级：高 / 中 / 低
+接待客服：{assigned_staff_name or assigned_ai_employee or last_agent_sender_name or latest AI/human sender_name or 未识别}
 
 WS名称：{ws_display_name, if available}
 客户名称：{customer_name, if available}
@@ -346,10 +361,27 @@ AI分析：
 请人工进入 SaleSmartly，使用“搜索关键词”找到该客户，确认上下文后再手动发送，不要盲目复制。
 ```
 
+Telegram follow-up and handoff alerts show `接待客服`. The value is detected in this order:
+
+```text
+customers.assigned_staff_name
+customers.assigned_ai_employee
+customers.last_agent_sender_name
+latest messages.sender_name where direction is human or ai
+SaleSmartly payload staff / agent / assignee / owner / service_user / operator fields
+未识别
+```
+
 High-risk Telegram title:
 
 ```text
 【需要人工接入】
+```
+
+High-risk alerts also include:
+
+```text
+接待客服：{staff_name}
 ```
 
 ## SaleSmartly Message Sending Module
