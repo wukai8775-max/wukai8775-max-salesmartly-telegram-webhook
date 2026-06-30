@@ -1,4 +1,5 @@
 const { analyzeFollowupDecision, classifyCustomerStatus, getHighRiskType } = require("../lib/followup-rules");
+const { getAssignedStaffName } = require("../lib/staff-profile");
 
 const FOLLOWUP_MODE = "telegram_only";
 const AUTO_CUSTOMER_SEND_DISABLED = true;
@@ -214,6 +215,7 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false }) 
     duplicate_blocked: decision.skipped_reason === "no_due_stage" || Boolean(decision.existing_pending_task),
     opt_out_stopped: decision.stop_reason === "customer_opt_out",
     auto_send_allowed: false,
+    staff_name: getAssignedStaffName(customer, messages),
     followup_stage: decision.followup_stage || null,
     suggested_message: decision.suggested_message || "",
     skipped_reason: decision.skipped_reason || "",
