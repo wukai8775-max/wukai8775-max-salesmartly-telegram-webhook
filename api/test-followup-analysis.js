@@ -41,6 +41,56 @@ function customerMessage(customer, text = customer.last_customer_message, time =
 }
 
 function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
+  if (name === "price_quote") {
+    const customer = sampleCustomer(now, "Can I get a price quote?");
+    return {
+      customer,
+      messages: [customerMessage(customer)],
+      logs: [],
+      tasks: [],
+    };
+  }
+
+  if (name === "catalog_request") {
+    const customer = sampleCustomer(now, "Can I see your catalog");
+    return {
+      customer,
+      messages: [customerMessage(customer)],
+      logs: [],
+      tasks: [],
+    };
+  }
+
+  if (name === "pricing_delivery") {
+    const customer = sampleCustomer(now, "Pricing, delivery");
+    return {
+      customer,
+      messages: [customerMessage(customer)],
+      logs: [],
+      tasks: [],
+    };
+  }
+
+  if (name === "price_objection") {
+    const customer = sampleCustomer(now, "Your prices are very high compared to the other supplier.");
+    return {
+      customer,
+      messages: [customerMessage(customer)],
+      logs: [],
+      tasks: [],
+    };
+  }
+
+  if (name === "product_question") {
+    const customer = sampleCustomer(now, "Do you carry pills and oils also?");
+    return {
+      customer,
+      messages: [customerMessage(customer)],
+      logs: [],
+      tasks: [],
+    };
+  }
+
   if (name === "quote_no_reply") {
     const customerAt = isoHoursBefore(now, 5);
     const quoteAt = isoHoursBefore(now, 4);
@@ -139,7 +189,7 @@ function getLatestCustomerText(messages = [], customer = {}) {
   );
 }
 
-function buildResponse({ customer, messages, logs, tasks, now }) {
+function buildResponse({ customer, messages, logs, tasks, now, force = false }) {
   const latestText = getLatestCustomerText(messages, customer);
   const decision = analyzeFollowupDecision({
     customer,
@@ -147,6 +197,7 @@ function buildResponse({ customer, messages, logs, tasks, now }) {
     logs,
     tasks,
     now,
+    force,
   });
 
   return {
@@ -155,6 +206,7 @@ function buildResponse({ customer, messages, logs, tasks, now }) {
     mode: FOLLOWUP_MODE,
     auto_customer_send_disabled: AUTO_CUSTOMER_SEND_DISABLED,
     would_send_customer: false,
+    force: Boolean(force),
     status_detected: classifyCustomerStatus(messages, customer),
     high_risk_type: getHighRiskType(latestText) || null,
     manual_handoff_required: decision.skipped_reason === "high_risk_handoff_required",
@@ -172,6 +224,11 @@ function buildResponse({ customer, messages, logs, tasks, now }) {
 module.exports = async function handler(req, res) {
   const availableScenarios = [
     "price_inquiry",
+    "price_quote",
+    "catalog_request",
+    "pricing_delivery",
+    "price_objection",
+    "product_question",
     "quote_no_reply",
     "ai_doubt",
     "call_request",
@@ -182,6 +239,7 @@ module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     const now = req.query?.now || new Date().toISOString();
     const scenario = req.query?.scenario || "price_inquiry";
+    const force = ["1", "true", "yes", "y"].includes(String(req.query?.force || "").toLowerCase());
     const sample = buildScenario(scenario, now);
 
     return res.status(200).json({
@@ -190,6 +248,7 @@ module.exports = async function handler(req, res) {
       ...buildResponse({
         ...sample,
         now,
+        force,
       }),
     });
   }
@@ -204,6 +263,7 @@ module.exports = async function handler(req, res) {
   const body = req.body || {};
   const now = body.now || new Date().toISOString();
   const scenario = body.scenario;
+  const force = ["1", "true", "yes", "y"].includes(String(body.force || req.query?.force || "").toLowerCase());
   const sample = scenario ? buildScenario(scenario, now) : buildScenario("price_inquiry", now);
   const customer = body.customer || sample.customer;
   const messages = Array.isArray(body.messages) ? body.messages : sample.messages;
@@ -217,6 +277,7 @@ module.exports = async function handler(req, res) {
       logs,
       tasks,
       now,
+      force,
     })
   );
 };
