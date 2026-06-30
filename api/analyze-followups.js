@@ -5,7 +5,7 @@ const {
   getContactDisplayValue,
   getSearchKeyword,
 } = require("../lib/salesmartly-profile");
-const { getAssignedStaffName } = require("../lib/staff-profile");
+const { getAssignedStaffName, getAssignedStaffId } = require("../lib/staff-profile");
 const {
   hasSupabaseEnv,
   listCustomersForAnalysis,
@@ -142,6 +142,7 @@ function buildFollowupReminderTelegramMessage(customer = {}, decision = {}, mess
   const lastMessage = valueOrFallback(decision.last_customer_message || customer.last_customer_message);
   const searchKeyword = getReminderSearchKeyword(customer);
   const staffName = getAssignedStaffName(customer, messages);
+  const staffId = getAssignedStaffId(customer, messages);
 
   return [
     "【客户回访提醒】",
@@ -150,6 +151,7 @@ function buildFollowupReminderTelegramMessage(customer = {}, decision = {}, mess
     `回访节点：${valueOrFallback(decision.followup_stage)}`,
     `优先级：${getPriorityLabel(decision.priority)}`,
     `接待客服：${staffName}`,
+    `接待客服ID：${staffId}`,
     "",
     optionalLine("WS名称", wsName),
     optionalLine("客户名称", customerName),
@@ -177,12 +179,14 @@ function buildHumanHandoffTelegramMessage(customer = {}, decision = {}, messages
   const lastMessage = valueOrFallback(decision.last_customer_message || customer.last_customer_message);
   const riskType = decision.raw_result?.risk_type || decision.status;
   const staffName = getAssignedStaffName(customer, messages);
+  const staffId = getAssignedStaffId(customer, messages);
 
   return [
     "【需要人工接入】",
     "",
     `原因：${valueOrFallback(HIGH_RISK_REASONS[riskType] || decision.reason || decision.skipped_reason)}`,
     `接待客服：${staffName}`,
+    `接待客服ID：${staffId}`,
     optionalLine("WS名称", wsName),
     optionalLine("客户名称", customerName),
     contactLine,
