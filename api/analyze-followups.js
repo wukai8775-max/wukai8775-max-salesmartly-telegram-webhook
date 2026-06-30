@@ -5,6 +5,7 @@ const {
   getContactDisplayValue,
   getSearchKeyword,
 } = require("../lib/salesmartly-profile");
+const { getAssignedStaffName } = require("../lib/staff-profile");
 const {
   hasSupabaseEnv,
   listCustomersForAnalysis,
@@ -134,12 +135,13 @@ function inferAnalysisReason(status = "", recentText = "") {
   return byStatus[status] || "客户进入可回访阶段，但需要人工先查看上下文再决定是否发送。";
 }
 
-function buildFollowupReminderTelegramMessage(customer = {}, decision = {}) {
+function buildFollowupReminderTelegramMessage(customer = {}, decision = {}, messages = []) {
   const wsName = getDisplayName(customer);
   const customerName = firstNonEmpty(customer.customer_name);
   const contactLine = getContactLine(customer);
   const lastMessage = valueOrFallback(decision.last_customer_message || customer.last_customer_message);
   const searchKeyword = getReminderSearchKeyword(customer);
+  const staffName = getAssignedStaffName(customer, messages);
 
   return [
     "【客户回访提醒】",
@@ -147,6 +149,7 @@ function buildFollowupReminderTelegramMessage(customer = {}, decision = {}) {
     `客户阶段：${valueOrFallback(decision.status)}`,
     `回访节点：${valueOrFallback(decision.followup_stage)}`,
     `优先级：${getPriorityLabel(decision.priority)}`,
+    `接待客服：${staffName}`,
     "",
     optionalLine("WS名称", wsName),
     optionalLine("客户名称", customerName),
@@ -167,17 +170,19 @@ function buildFollowupReminderTelegramMessage(customer = {}, decision = {}) {
   ].filter((line) => line !== "").join("\n");
 }
 
-function buildHumanHandoffTelegramMessage(customer = {}, decision = {}) {
+function buildHumanHandoffTelegramMessage(customer = {}, decision = {}, messages = []) {
   const wsName = getDisplayName(customer);
   const customerName = firstNonEmpty(customer.customer_name);
   const contactLine = getContactLine(customer);
   const lastMessage = valueOrFallback(decision.last_customer_message || customer.last_customer_message);
   const riskType = decision.raw_result?.risk_type || decision.status;
+  const staffName = getAssignedStaffName(customer, messages);
 
   return [
     "【需要人工接入】",
     "",
     `原因：${valueOrFallback(HIGH_RISK_REASONS[riskType] || decision.reason || decision.skipped_reason)}`,
+    `接待客服：${staffName}`,
     optionalLine("WS名称", wsName),
     optionalLine("客户名称", customerName),
     contactLine,
@@ -245,7 +250,7 @@ async function createTaskIfNeeded(customer, decision) {
   };
 }
 
-async function processHighRiskDecision(customer, decision) {
+async function processHighRiskDecision(customer, decision, messages = []) {
   await updateCustomerByIdentity(customer, {
     current_status: decision.status,
     risk_level: decision.risk_level,
@@ -274,7 +279,7 @@ async function processHighRiskDecision(customer, decision) {
     scheduled_at: new Date().toISOString(),
     skipped_reason: "high_risk_handoff_required",
   });
-  const telegramResult = await sendTelegramSafely(buildHumanHandoffTelegramMessage(customer, decision));
+  const telegramResult = await sendTelegramSafely(buildHumanHandoffTelegramMessage(customer, decision, messages));
 
   await insertFollowupLog({
     contact_id: customer.contact_id,
@@ -329,7 +334,7 @@ async function processStopDecision(customer, decision) {
   };
 }
 
-async function processTelegramReminderDecision(customer, logs, decision, now) {
+async function processTelegramReminderDecision(customer, logs, decision, now, messages = []) {
   const { task, created } = await createTaskIfNeeded(customer, decision);
   const messageText = firstNonEmpty(task?.suggested_message, decision.suggested_message);
 
@@ -343,7 +348,7 @@ async function processTelegramReminderDecision(customer, logs, decision, now) {
     buildFollowupReminderTelegramMessage(customer, {
       ...decision,
       suggested_message: messageText,
-    })
+    }, messages)
   );
   const nowIso = new Date().toISOString();
 
@@ -423,7 +428,7 @@ async function processCustomer(customer, options = {}) {
   }
 
   if (decision.risk_level === "high" && decision.skipped_reason === "high_risk_handoff_required") {
-    return processHighRiskDecision(customer, decision);
+    return processHighRiskDecision(customer, decision, messages);
   }
 
   if (decision.should_stop) {
@@ -444,7 +449,7 @@ async function processCustomer(customer, options = {}) {
     };
   }
 
-  return processTelegramReminderDecision(customer, logs, decision, now);
+  return processTelegramReminderDecision(customer, logs, decision, now, messages);
 }
 
 module.exports = async function handler(req, res) {
