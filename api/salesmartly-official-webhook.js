@@ -19,7 +19,7 @@ const {
 } = require("../lib/supabase-store");
 const { sendTelegramMessage } = require("../lib/telegram");
 const { isOptOutMessage } = require("../lib/followup-rules");
-const { getAssignedStaffName } = require("../lib/staff-profile");
+const { getAssignedStaffName, getAssignedStaffId } = require("../lib/staff-profile");
 
 function normalizeTokenValue(value) {
   if (Array.isArray(value)) {
@@ -287,6 +287,7 @@ function buildOfficialShippingInfoTelegramMessage(profile = {}, lastMessage = ""
     "【客户已提交收货信息】",
     "",
     `接待客服：${getAssignedStaffName(profile, messages)}`,
+    `接待客服ID：${getAssignedStaffId(profile, messages)}`,
     buildWsOrSearchLine(profile, lastMessage),
     `客户填写姓名：${getSubmittedCustomerName(lastMessage, profile.customer_name)}`,
     `渠道：${valueOrFallback(profile.channel)}`,
@@ -422,6 +423,7 @@ async function handleOfficialWebhookBusiness(req, res) {
     return [];
   });
   const staffName = getAssignedStaffName(alertProfile, recentMessages);
+  const staffId = getAssignedStaffId(alertProfile, recentMessages);
   const followupStop = await stopFollowupIfCustomerOptedOut(alertProfile, direction);
   const telegramAlert = await sendOfficialTelegramAlertIfNeeded(alertProfile, direction, recentMessages);
 
@@ -448,6 +450,7 @@ async function handleOfficialWebhookBusiness(req, res) {
       last_message: cachedProfile.last_message || "",
       message_time: normalized.message_time || "",
       staff_name: staffName,
+      staff_id: staffId,
     },
   });
 }
