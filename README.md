@@ -49,7 +49,7 @@ TELEGRAM_CHAT_ID=
 SALES_SMARTLY_WEBHOOK_SECRET=
 ```
 
-Optional:
+Optional compatibility variables:
 
 ```text
 TELEGRAM_FOLLOWUP_CHAT_ID=
@@ -67,7 +67,18 @@ AUTO_FOLLOWUP_ENABLED=false
 
 `FOLLOWUP_MODE=telegram_only` has highest priority. Even if `AUTO_FOLLOWUP_ENABLED=true` exists in Vercel, `/api/analyze-followups` will not call the SaleSmartly active-send API and will not send customer-facing messages.
 
-If `TELEGRAM_FOLLOWUP_CHAT_ID` is configured, AI follow-up reminders use that Telegram group. Emergency handoff alerts and SaleSmartly/HelpKnow alerts continue to use `TELEGRAM_CHAT_ID`.
+All Telegram alerts are sent to `TELEGRAM_CHAT_ID`:
+
+```text
+客户回访提醒
+需要人工接入
+客户提交收货信息
+客户质疑 AI / bot
+客户要求电话 / 视频
+投诉 / 售后 / 付款争议等紧急提醒
+```
+
+`TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility and is not prioritized by the current code.
 
 ## Supabase SQL
 
@@ -115,6 +126,7 @@ create table if not exists messages (
   project_id text,
   direction text not null check (direction in ('customer', 'ai', 'human', 'system')),
   sender_name text,
+  sender_id text,
   message_text text,
   message_time timestamptz,
   raw_payload jsonb,
@@ -157,12 +169,13 @@ create index if not exists idx_followup_tasks_contact_stage on followup_tasks(co
 create index if not exists idx_followup_logs_contact_stage on followup_logs(contact_id, followup_stage, action_type);
 ```
 
-If your `customers` table already exists, run this upgrade SQL once:
+If your tables already exist, run this upgrade SQL once:
 
 ```sql
 alter table customers add column if not exists assigned_staff_name text;
 alter table customers add column if not exists assigned_staff_id text;
 alter table customers add column if not exists last_agent_sender_name text;
+alter table messages add column if not exists sender_id text;
 ```
 
 ## SaleSmartly Official Webhook
@@ -211,7 +224,9 @@ direction
 raw_payload
 ```
 
-When the official webhook receives a customer message that looks like submitted shipping information, it also sends the Telegram alert `【客户已提交收货信息】`. This covers both labelled formats such as `Name: / Phone: / Address:` and multi-line customer replies such as name, phone, country, street address, zip code, and email without labels.
+When the official webhook receives a customer message that looks like submitted shipping information, it also sends the Telegram alert `【客户已提交收货信息】` to `TELEGRAM_CHAT_ID`.
+
+The shipping information alert also shows `接待客服` and `接待客服ID`. The value is resolved from the saved customer fields first, then from the latest `messages.sender_name` / `messages.sender_id` where `direction` is `human` or `ai`.
 
 ## HelpKnow Telegram Webhook
 
@@ -253,10 +268,10 @@ For `ai_doubt`, the response includes:
 Current workflow:
 
 ```text
-SaleSmartly -> Vercel -> Supabase -> /api/analyze-followups -> Telegram group reminder -> human follow-up
+SaleSmartly -> Vercel -> Supabase -> /api/analyze-followups -> TELEGRAM_CHAT_ID group reminder -> human follow-up
 ```
 
-`/api/analyze-followups` only reads Supabase conversation data, creates `followup_tasks`, writes `followup_logs`, and sends Telegram reminders. It never sends messages to customers.
+`/api/analyze-followups` only reads Supabase conversation data, creates `followup_tasks`, writes `followup_logs`, and sends Telegram reminders. It never sends messages to customers and does not change the normal HelpKnow / Omen / Jett customer reply flow.
 
 Low-risk reminder statuses:
 
@@ -279,7 +294,7 @@ Can I get a price quote?
 can i have a price list?
 Can I see your catalog
 Pricing, delivery
-Your prices are very high compared to the ...
+Your prices are very high compared to the other supplier.
 Do you carry pills and oils also?
 ```
 
@@ -294,7 +309,7 @@ payment_dispute
 angry_customer
 ```
 
-Permanent opt-out phrases stop all future follow-ups:
+Permanent opt-out phrases stop all future follow-up reminders:
 
 ```text
 stop
@@ -312,12 +327,12 @@ don't contact me again
 Telegram reminder cadence:
 
 ```text
-3h after last customer message
-6h after last customer message
-9h after last customer message
-24h after last customer message
-48h after last customer message
-72h after last customer message
+3h after the latest AI/human staff message if the customer has not replied
+6h after the latest AI/human staff message if the customer has not replied
+9h after the latest AI/human staff message if the customer has not replied
+24h after the latest AI/human staff message if the customer has not replied
+48h after the latest AI/human staff message if the customer has not replied
+72h after the latest AI/human staff message if the customer has not replied
 ```
 
 Duplicate prevention:
@@ -343,36 +358,26 @@ Telegram reminder format for low-risk cases:
 
 客户阶段：{status}
 回访节点：{followup_stage}
-优先级：高 / 中 / 低
-接待客服：{assigned_staff_name or assigned_ai_employee or last_agent_sender_name or latest AI/human sender_name or 未识别}
+优先级：{priority}
+接待客服：{staff_name or 未识别}
+接待客服ID：{staff_id or 未识别}
 
-WS名称：{ws_display_name, if available}
-客户名称：{customer_name, if available}
-联系方式：{phone/email, if available}
+WS名称：{ws_display_name}
+客户名称：{customer_name}
+联系方式：{phone/email}
 搜索关键词：{ws_display_name or customer_name or phone or email or contact_id}
 
 客户最近消息：
 {last_customer_message}
 
 AI分析：
-{reason}
+{analysis}
 
 建议人工回访话术：
 {English suggested message}
 
 操作建议：
 请人工进入 SaleSmartly，使用“搜索关键词”找到该客户，确认上下文后再手动发送，不要盲目复制。
-```
-
-Telegram follow-up and handoff alerts show `接待客服`. The value is detected in this order:
-
-```text
-customers.assigned_staff_name
-customers.assigned_ai_employee
-customers.last_agent_sender_name
-latest messages.sender_name where direction is human or ai
-SaleSmartly payload staff / agent / assignee / owner / service_user / operator fields
-未识别
 ```
 
 High-risk Telegram title:
@@ -384,8 +389,60 @@ High-risk Telegram title:
 High-risk alerts also include:
 
 ```text
-接待客服：{staff_name}
+接待客服：{staff_name or 未识别}
+接待客服ID：{staff_id or 未识别}
 ```
+
+## Staff Detection
+
+Telegram follow-up and handoff alerts show both `接待客服` and `接待客服ID`.
+
+Staff name detection priority:
+
+```text
+customers.assigned_staff_name
+customers.assigned_ai_employee
+customers.last_agent_sender_name
+latest messages.sender_name where direction is human or ai
+SaleSmartly payload staff / agent / assignee / owner / service_user / operator fields
+未识别
+```
+
+Staff ID detection priority:
+
+```text
+customers.assigned_staff_id
+SaleSmartly payload staff_id / agent_id / assignee_id / owner_id / service_user_id / operator_id fields
+latest messages.sender_id where direction is human or ai
+未识别
+```
+
+Payload aliases include:
+
+```text
+assigned_staff_name / assigned_staff_id
+staff_name / staff_id / staff.name / staff.id
+agent_name / agent_id / agent.name / agent.id
+operator_name / operator_id / operator.name / operator.id
+owner_name / owner_id / owner.name / owner.id
+service_user_name / service_user_id / service_user.name / service_user.id
+assignee_name / assignee_id / assignee.name / assignee.id
+handler_name / handler_id / handler.name / handler.id
+member_name / member_id / member.name / member.id
+user_name / user_id / user.name / user.id
+kefu_name / kefu_id
+customer_service_name / customer_service_id
+ai_employee_name
+receptionist
+customer_service
+```
+
+When a webhook event is stored with `direction=human` or `direction=ai`:
+
+- `messages.sender_name` is filled from the best staff name candidate;
+- `messages.sender_id` is filled when the column exists and a staff ID is available;
+- `customers.last_agent_sender_name` is updated;
+- empty `customers.assigned_staff_name` / `customers.assigned_staff_id` fields are filled from the same staff profile.
 
 ## SaleSmartly Message Sending Module
 
@@ -417,6 +474,7 @@ Expected behavior in current `telegram_only` mode:
 - write `followup_logs` with `telegram_alert` or `skipped`;
 - send Telegram `【客户回访提醒】` for low-risk follow-up opportunities;
 - send Telegram `【需要人工接入】` for high-risk cases;
+- send all Telegram alerts to `TELEGRAM_CHAT_ID`;
 - never send customer-facing messages.
 
 Response fields include:
@@ -473,51 +531,44 @@ The endpoint accepts either `CRON_SECRET` or `SALES_SMARTLY_WEBHOOK_SECRET`.
 
 This endpoint does not write Supabase, Telegram, or SaleSmartly.
 
+Built-in scenario tests:
+
 ```bash
-curl -X POST "https://your-domain.vercel.app/api/test-followup-analysis" \
-  -H "Content-Type: application/json" \
-  --data-raw '{
-    "now": "2026-06-29T12:00:00.000Z",
-    "customer": {
-      "contact_id": "test_contact",
-      "session_id": "test_session",
-      "project_id": "test_project",
-      "ws_display_name": "ShaLee",
-      "customer_name": "ShaLee",
-      "phone": "+1 3017511509",
-      "channel": "WhatsApp",
-      "first_customer_message_at": "2026-06-29T08:00:00.000Z",
-      "last_customer_message_at": "2026-06-29T08:00:00.000Z",
-      "last_customer_message": "Can I get the price list?",
-      "created_at": "2026-06-29T08:00:00.000Z"
-    },
-    "messages": [
-      {
-        "direction": "customer",
-        "message_text": "Can I get the price list?",
-        "message_time": "2026-06-29T08:00:00.000Z"
-      }
-    ],
-    "logs": [],
-    "tasks": []
-  }'
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_omen&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_jett&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=no_staff&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=handoff_jett&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=duplicate_stage"
 ```
 
-Expected:
+Expected staff results:
 
 ```json
 {
   "mode": "telegram_only",
   "auto_customer_send_disabled": true,
   "would_send_customer": false,
-  "status_detected": "price_requested",
-  "telegram_alert_allowed": true,
-  "auto_send_allowed": false,
-  "followup_stage": "3h"
+  "telegram_target_chat_source": "TELEGRAM_CHAT_ID",
+  "staff_name": "Omen",
+  "staff_id": "xxx"
 }
 ```
 
-Built-in scenario tests:
+```json
+{
+  "staff_name": "Jett",
+  "staff_id": "yyy"
+}
+```
+
+```json
+{
+  "staff_name": "未识别",
+  "staff_id": "未识别"
+}
+```
+
+Other useful built-in scenarios:
 
 ```bash
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_inquiry"
@@ -530,82 +581,9 @@ curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_n
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=opt_out"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=duplicate_stage"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=catalog_request&force=true"
 ```
 
-High-risk test:
-
-```bash
-curl -X POST "https://your-domain.vercel.app/api/test-followup-analysis" \
-  -H "Content-Type: application/json" \
-  --data-raw '{
-    "customer": {
-      "contact_id": "test_contact",
-      "session_id": "test_session",
-      "first_customer_message_at": "2026-06-29T08:00:00.000Z",
-      "last_customer_message_at": "2026-06-29T08:00:00.000Z",
-      "last_customer_message": "Are you a bot? I want to talk to a real person."
-    },
-    "messages": [
-      {
-        "direction": "customer",
-        "message_text": "Are you a bot? I want to talk to a real person.",
-        "message_time": "2026-06-29T08:00:00.000Z"
-      }
-    ],
-    "logs": [],
-    "tasks": []
-  }'
-```
-
-Expected:
-
-```json
-{
-  "mode": "telegram_only",
-  "auto_customer_send_disabled": true,
-  "would_send_customer": false,
-  "high_risk_type": "ai_doubt",
-  "manual_handoff_required": true,
-  "auto_send_allowed": false,
-  "skipped_reason": "high_risk_handoff_required"
-}
-```
-
-Duplicate stage test:
-
-```bash
-curl -X POST "https://your-domain.vercel.app/api/test-followup-analysis" \
-  -H "Content-Type: application/json" \
-  --data-raw '{
-    "now": "2026-06-29T12:00:00.000Z",
-    "customer": {
-      "contact_id": "test_contact",
-      "session_id": "test_session",
-      "first_customer_message_at": "2026-06-29T08:00:00.000Z",
-      "last_customer_message_at": "2026-06-29T08:00:00.000Z",
-      "last_customer_message": "Can I get the price list?"
-    },
-    "messages": [
-      {
-        "direction": "customer",
-        "message_text": "Can I get the price list?",
-        "message_time": "2026-06-29T08:00:00.000Z"
-      }
-    ],
-    "logs": [
-      {
-        "action_type": "telegram_alert",
-        "followup_stage": "3h",
-        "created_at": "2026-06-29T11:05:00.000Z"
-      }
-    ],
-    "tasks": []
-  }'
-```
-
-Expected: it should not create the `3h` Telegram reminder again and `would_send_customer` remains `false`.
+Duplicate stage test should not create the same reminder stage again, and `would_send_customer` remains `false`.
 
 ## Debug Supabase Insert
 
