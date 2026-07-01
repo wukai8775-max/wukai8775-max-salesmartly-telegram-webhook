@@ -1,9 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron-analyze-followups",
-      "schedule": "0 * * * *"
-    }
-  ]
-}
-
