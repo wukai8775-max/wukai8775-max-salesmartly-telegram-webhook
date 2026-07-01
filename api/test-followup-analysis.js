@@ -36,8 +36,11 @@ function sampleCustomer(now = new Date().toISOString(), lastMessage = "Can I get
     created_at: first,
   };
 
-  if (staff) {
+  if (staff?.name) {
     customer.assigned_staff_name = staff.name;
+  }
+
+  if (staff?.id) {
     customer.assigned_staff_id = staff.id;
   }
 
@@ -71,8 +74,11 @@ function quoteScenario(now, staff = { name: "Omen", id: "xxx" }) {
     message_time: quoteAt,
   };
 
-  if (staff) {
+  if (staff?.name) {
     agentMessage.sender_name = staff.name;
+  }
+
+  if (staff?.id) {
     agentMessage.sender_id = staff.id;
     agentMessage.raw_payload = {
       sys_user_id: staff.id,
@@ -98,6 +104,18 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
 
   if (name === "staff_jett") {
     return quoteScenario(now, { name: "Jett", id: "yyy" });
+  }
+
+  if (name === "staff_map_yinping") {
+    return quoteScenario(now, { id: "1201819" });
+  }
+
+  if (name === "staff_map_jett_agent") {
+    return quoteScenario(now, { id: "1203624" });
+  }
+
+  if (name === "staff_map_unknown") {
+    return quoteScenario(now, { id: "0000000" });
   }
 
   if (name === "no_staff") {
@@ -328,6 +346,9 @@ module.exports = async function handler(req, res) {
     "quote_no_reply",
     "staff_omen",
     "staff_jett",
+    "staff_map_yinping",
+    "staff_map_jett_agent",
+    "staff_map_unknown",
     "no_staff",
     "handoff_jett",
     "ai_doubt",
