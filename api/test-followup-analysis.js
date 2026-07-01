@@ -437,7 +437,7 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false, by
     high_risk_type: getHighRiskType(latestText) || null,
     manual_handoff_required: decision.skipped_reason === "high_risk_handoff_required",
     telegram_alert_allowed: highRiskTelegramAllowed || lowRiskTelegramAllowed,
-    duplicate_blocked: decision.skipped_reason === "no_due_stage" || Boolean(decision.existing_pending_task && !quietDeferred),
+    duplicate_blocked: decision.skipped_reason === "no_due_stage",
     opt_out_stopped: decision.stop_reason === "customer_opt_out",
     auto_send_allowed: false,
     staff_name: staffProfile.name,
