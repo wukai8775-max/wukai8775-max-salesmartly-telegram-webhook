@@ -1,6 +1,6 @@
 const { firstNonEmpty } = require("../lib/salesmartly-profile");
 const { hasSupabaseEnv } = require("../lib/supabase-store");
-const { runFollowupAnalysis, buildBaseResponse, FOLLOWUP_MODE, AUTO_CUSTOMER_SEND_DISABLED } = require("../lib/followup-analyzer");
+const { runFollowupAnalysis, buildBaseResponse } = require("../lib/followup-analyzer");
 const { getQuietHoursState } = require("../lib/quiet-hours");
 
 function getWebhookSecret(req) {
@@ -45,6 +45,21 @@ function isBypassQuietEnabled(req, force) {
   return Boolean(force && isTruthy(firstNonEmpty(req.body?.bypass_quiet, req.query?.bypass_quiet)));
 }
 
+function buildErrorResponse({ now, force, bypassQuiet, message }) {
+  return {
+    ...buildBaseResponse({ quietState: getQuietHoursState(now), force, bypassQuiet, cron: false }),
+    ok: false,
+    success: false,
+    scanned: 0,
+    telegram_alerts_created: 0,
+    tasks_created: 0,
+    skipped: 0,
+    errors: 1,
+    deferred_by_quiet_hours: 0,
+    error: message,
+  };
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({
@@ -65,22 +80,14 @@ module.exports = async function handler(req, res) {
   const now = req.body?.now || req.query?.now;
 
   if (!hasSupabaseEnv()) {
-    return res.status(500).json({
-      ok: false,
-      success: false,
-      mode: FOLLOWUP_MODE,
-      auto_customer_send_disabled: AUTO_CUSTOMER_SEND_DISABLED,
-      force,
-      bypass_quiet: bypassQuiet,
-      ...buildBaseResponse({ quietState: getQuietHoursState(now), force, bypassQuiet, cron: false }),
-      scanned: 0,
-      telegram_alerts_created: 0,
-      tasks_created: 0,
-      skipped: 0,
-      errors: 1,
-      deferred_by_quiet_hours: 0,
-      error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
-    });
+    return res.status(500).json(
+      buildErrorResponse({
+        now,
+        force,
+        bypassQuiet,
+        message: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+      })
+    );
   }
 
   try {
@@ -94,18 +101,13 @@ module.exports = async function handler(req, res) {
 
     return res.status(200).json(result);
   } catch (error) {
-    const quietState = getQuietHoursState(now);
-    return res.status(500).json({
-      ...buildBaseResponse({ quietState, force, bypassQuiet, cron: false }),
-      ok: false,
-      success: false,
-      scanned: 0,
-      telegram_alerts_created: 0,
-      tasks_created: 0,
-      skipped: 0,
-      errors: 1,
-      deferred_by_quiet_hours: 0,
-      error: error.message,
-    });
+    return res.status(500).json(
+      buildErrorResponse({
+        now,
+        force,
+        bypassQuiet,
+        message: error.message,
+      })
+    );
   }
 };
