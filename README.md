@@ -46,7 +46,7 @@ SALES_SMARTLY_WEBHOOK_SECRET=
 CRON_SECRET=
 ```
 
-Optional compatibility, staff mapping, and quiet hours:
+Optional:
 
 ```text
 STAFF_ID_NAME_MAP=
@@ -61,16 +61,9 @@ FOLLOWUP_QUIET_END=19:00
 FOLLOWUP_QUIET_BEHAVIOR=defer
 ```
 
-Production reminder mode:
-
-```text
-FOLLOWUP_MODE=telegram_only
-AUTO_FOLLOWUP_ENABLED=false
-```
-
 `FOLLOWUP_MODE=telegram_only` has highest priority. Even if `AUTO_FOLLOWUP_ENABLED=true`, the analyzer does not call SaleSmartly active-send APIs and does not send customer-facing messages.
 
-`TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility. The current code does not prioritize it.
+`TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility. Current code does not prioritize it. All reminders and emergency alerts go to `TELEGRAM_CHAT_ID`.
 
 ## Why Manual PowerShell Was Required Before
 
@@ -78,13 +71,23 @@ SaleSmartly webhook only receives new events and writes customer/message data in
 
 The follow-up logic runs in `/api/analyze-followups`. If no scheduler calls that endpoint, Telegram follow-up reminders only happen when you manually call it from PowerShell or another HTTP client.
 
-The new `/api/cron-analyze-followups` endpoint exists only for automatic scheduled analysis.
+`/api/cron-analyze-followups` is the scheduled wrapper around the same analysis logic.
 
 ## Automatic Schedule
 
-### Option A: Vercel Cron
+### Option A: External HTTP Timer, recommended for current Vercel plan
 
-This repo includes `vercel.json`:
+Use an external HTTP scheduler to call once per hour:
+
+```text
+https://wukai8775-max-salesmartly-telegram.vercel.app/api/cron-analyze-followups?secret=<CRON_SECRET>
+```
+
+This is currently the safest option because Vercel returned a deployment failure for an active hourly `vercel.json` cron config on this project. That usually means the current Vercel plan does not support hourly Cron frequency.
+
+### Option B: Vercel Cron, only when the plan supports hourly cron
+
+This repo includes `vercel.hourly-cron.example.json` as a copyable example:
 
 ```json
 {
@@ -97,18 +100,10 @@ This repo includes `vercel.json`:
 }
 ```
 
-This calls `/api/cron-analyze-followups` once per hour. Vercel Cron sends a GET request. When `CRON_SECRET` is configured in Vercel, Vercel includes:
+If the Vercel plan supports hourly Cron, copy this file to `vercel.json` and redeploy. Vercel Cron sends a GET request. When `CRON_SECRET` is configured in Vercel, Vercel can send:
 
 ```text
 Authorization: Bearer <CRON_SECRET>
-```
-
-### Option B: External HTTP Timer
-
-If Vercel Cron is not available or not convenient, use any external HTTP scheduler to call once per hour:
-
-```text
-https://wukai8775-max-salesmartly-telegram.vercel.app/api/cron-analyze-followups?secret=<CRON_SECRET>
 ```
 
 ## Cron Endpoint
@@ -414,7 +409,7 @@ curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_a
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_deferred_log_not_duplicate"
 ```
 
-Expected examples:
+Expected low-risk quiet result:
 
 ```json
 {
@@ -426,11 +421,14 @@ Expected examples:
 }
 ```
 
+Expected high-risk quiet result:
+
 ```json
 {
   "manual_handoff_required": true,
   "telegram_alert_allowed": true,
-  "deferred_by_quiet_hours": 0
+  "deferred_by_quiet_hours": 0,
+  "would_send_customer": false
 }
 ```
 
