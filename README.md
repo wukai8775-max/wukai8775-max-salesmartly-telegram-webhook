@@ -49,9 +49,10 @@ TELEGRAM_CHAT_ID=
 SALES_SMARTLY_WEBHOOK_SECRET=
 ```
 
-Optional compatibility variables:
+Optional compatibility and staff mapping variables:
 
 ```text
+STAFF_ID_NAME_MAP=
 TELEGRAM_FOLLOWUP_CHAT_ID=
 SALES_SMARTLY_PROJECT_ID=
 CRON_SECRET=
@@ -79,6 +80,36 @@ All Telegram alerts are sent to `TELEGRAM_CHAT_ID`:
 ```
 
 `TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility and is not prioritized by the current code.
+
+## STAFF_ID_NAME_MAP
+
+`STAFF_ID_NAME_MAP` is an optional JSON object string. It maps SaleSmartly staff IDs to readable staff names when webhook payloads only provide an ID.
+
+Recommended Vercel value:
+
+```json
+{
+  "1195645": "管理",
+  "1201817": "剑冰",
+  "1192958": "邱恺",
+  "1201819": "银萍",
+  "1192960": "杨翔钦",
+  "1192964": "林欣雅",
+  "1192975": "林霖",
+  "1192978": "林雪钦",
+  "1192979": "郑文彬",
+  "1199741": "Omen Agent",
+  "1203624": "Jett Agent"
+}
+```
+
+Single-line Vercel env value:
+
+```text
+{"1195645":"管理","1201817":"剑冰","1192958":"邱恺","1201819":"银萍","1192960":"杨翔钦","1192964":"林欣雅","1192975":"林霖","1192978":"林雪钦","1192979":"郑文彬","1199741":"Omen Agent","1203624":"Jett Agent"}
+```
+
+If `STAFF_ID_NAME_MAP` is invalid JSON, the interfaces do not crash. The code writes a safe log with the parse error name/message only, then keeps showing `接待客服：未识别` when no other name source exists.
 
 ## Supabase SQL
 
@@ -226,7 +257,7 @@ raw_payload
 
 When the official webhook receives a customer message that looks like submitted shipping information, it also sends the Telegram alert `【客户已提交收货信息】` to `TELEGRAM_CHAT_ID`.
 
-The shipping information alert also shows `接待客服` and `接待客服ID`. The value is resolved from the saved customer fields first, then from the latest `messages.sender_name` / `messages.sender_id` where `direction` is `human` or `ai`.
+The shipping information alert also shows `接待客服` and `接待客服ID`. The value is resolved from the saved customer fields first, then from the latest `messages.sender_name` / `messages.sender_id` where `direction` is `human` or `ai`, then from `STAFF_ID_NAME_MAP` if only an ID is available.
 
 ## HelpKnow Telegram Webhook
 
@@ -285,17 +316,6 @@ later_followup
 high_intent_no_reply
 price_objection
 product_question_no_reply
-```
-
-Examples that are treated as low-risk Telegram reminder candidates:
-
-```text
-Can I get a price quote?
-can i have a price list?
-Can I see your catalog
-Pricing, delivery
-Your prices are very high compared to the other supplier.
-Do you carry pills and oils also?
 ```
 
 High-risk scenarios. These only create Telegram `【需要人工接入】` alerts:
@@ -405,6 +425,7 @@ customers.assigned_ai_employee
 customers.last_agent_sender_name
 latest messages.sender_name where direction is human or ai
 SaleSmartly payload staff / agent / assignee / owner / service_user / operator fields
+if staff name is still 未识别 and staff ID exists: STAFF_ID_NAME_MAP[staff_id]
 未识别
 ```
 
@@ -491,8 +512,6 @@ Response fields include:
 }
 ```
 
-`status_not_reminder_allowed` means the latest customer message did not match a supported low-risk follow-up status and did not match a high-risk handoff status. It should not be returned for clear price, quote, price list, catalog, shipping/delivery, price objection, or product-question messages.
-
 Force a Telegram-only test run:
 
 ```bash
@@ -536,35 +555,38 @@ Built-in scenario tests:
 ```bash
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_omen&force=true"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_jett&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_map_yinping&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_map_jett_agent&force=true"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_map_unknown&force=true"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=no_staff&force=true"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=handoff_jett&force=true"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=duplicate_stage"
 ```
 
-Expected staff results:
+Expected staff map results when `STAFF_ID_NAME_MAP` is configured:
 
 ```json
 {
-  "mode": "telegram_only",
-  "auto_customer_send_disabled": true,
-  "would_send_customer": false,
-  "telegram_target_chat_source": "TELEGRAM_CHAT_ID",
-  "staff_name": "Omen",
-  "staff_id": "xxx"
+  "staff_name": "银萍",
+  "staff_id": "1201819",
+  "staff_source": "env.STAFF_ID_NAME_MAP"
 }
 ```
 
 ```json
 {
-  "staff_name": "Jett",
-  "staff_id": "yyy"
+  "staff_name": "Jett Agent",
+  "staff_id": "1203624",
+  "staff_source": "env.STAFF_ID_NAME_MAP"
 }
 ```
+
+Expected fallback when ID is not mapped:
 
 ```json
 {
   "staff_name": "未识别",
-  "staff_id": "未识别"
+  "staff_id": "0000000"
 }
 ```
 
