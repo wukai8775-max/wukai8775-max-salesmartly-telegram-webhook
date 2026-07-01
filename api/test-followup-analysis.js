@@ -199,19 +199,18 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
   }
 
   if (name === "duplicate_stage") {
-    const customer = sampleCustomer(now, "Can I get the price list?");
+    const scenario = quoteScenario(now, { name: "Omen", id: "xxx" });
     return {
-      customer,
-      messages: [customerMessage(customer)],
+      ...scenario,
       logs: [
         {
           action_type: "telegram_alert",
           followup_stage: "3h",
-          status: "price_requested",
+          status: "quote_sent_no_reply",
           created_at: isoHoursBefore(now, 1),
           raw_result: {
             mode: FOLLOWUP_MODE,
-            template_id: "price_list_no_reply",
+            template_id: "quote_no_reply_basic_test_order",
           },
         },
       ],
