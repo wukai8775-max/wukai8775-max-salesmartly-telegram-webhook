@@ -1,5 +1,6 @@
 const { analyzeFollowupDecision, classifyCustomerStatus, getHighRiskType } = require("../lib/followup-rules");
 const { getAssignedStaffProfile } = require("../lib/staff-profile");
+const { getQuietHoursState, getQuietHoursResponseFields, shouldDeferForQuietHours } = require("../lib/quiet-hours");
 
 const FOLLOWUP_MODE = "telegram_only";
 const AUTO_CUSTOMER_SEND_DISABLED = true;
@@ -9,6 +10,14 @@ const PRIORITY_LABELS = {
   high: "高",
   medium: "中",
   low: "低",
+};
+
+const QUIET_TEST_OVERRIDE = {
+  enabled: true,
+  timezone: "Asia/Shanghai",
+  start: "13:00",
+  end: "19:00",
+  behavior: "defer",
 };
 
 function isoHoursBefore(now, hours) {
@@ -57,6 +66,33 @@ function customerMessage(customer, text = customer.last_customer_message, time =
   };
 }
 
+function agentMessage(customer, text, time, staff = { name: "Omen", id: "xxx" }) {
+  const message = {
+    contact_id: customer.contact_id,
+    session_id: customer.session_id,
+    direction: "ai",
+    message_text: text,
+    message_time: time,
+  };
+
+  if (staff?.name) {
+    message.sender_name = staff.name;
+  }
+
+  if (staff?.id) {
+    message.sender_id = staff.id;
+    message.raw_payload = {
+      sys_user_id: staff.id,
+      user: {
+        id: staff.id,
+        name: staff.name,
+      },
+    };
+  }
+
+  return message;
+}
+
 function quoteScenario(now, staff = { name: "Omen", id: "xxx" }) {
   const customerAt = isoHoursBefore(now, 5);
   const quoteAt = isoHoursBefore(now, 4);
@@ -66,34 +102,37 @@ function quoteScenario(now, staff = { name: "Omen", id: "xxx" }) {
     last_customer_message_at: customerAt,
     last_customer_message: "Can you quote Retatrutide 20mg x 2 boxes?",
   };
-  const agentMessage = {
-    contact_id: customer.contact_id,
-    session_id: customer.session_id,
-    direction: "ai",
-    message_text: "Here is your quote. Product total is $364, shipping is $70, total amount is $455.70.",
-    message_time: quoteAt,
-  };
-
-  if (staff?.name) {
-    agentMessage.sender_name = staff.name;
-  }
-
-  if (staff?.id) {
-    agentMessage.sender_id = staff.id;
-    agentMessage.raw_payload = {
-      sys_user_id: staff.id,
-      user: {
-        id: staff.id,
-        name: staff.name,
-      },
-    };
-  }
 
   return {
     customer,
-    messages: [customerMessage(customer, customer.last_customer_message, customerAt), agentMessage],
+    messages: [
+      customerMessage(customer, customer.last_customer_message, customerAt),
+      agentMessage(customer, "Here is your quote. Product total is $364, shipping is $70, total amount is $455.70.", quoteAt, staff),
+    ],
     logs: [],
     tasks: [],
+  };
+}
+
+function priceRequestedAfterStaffScenario(now, extra = {}) {
+  const customerAt = isoHoursBefore(now, 5);
+  const agentAt = isoHoursBefore(now, 4);
+  const customer = {
+    ...sampleCustomer(now, "How much is Retatrutide?", { name: "Omen", id: "xxx" }),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: "How much is Retatrutide?",
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, customer.last_customer_message, customerAt),
+      agentMessage(customer, "I shared the product details above. I can help narrow this down if you tell me your goal.", agentAt),
+    ],
+    logs: extra.logs || [],
+    tasks: extra.tasks || [],
+    quiet_overrides: QUIET_TEST_OVERRIDE,
   };
 }
 
@@ -116,6 +155,58 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
 
   if (name === "staff_map_unknown") {
     return quoteScenario(now, { id: "0000000" });
+  }
+
+  if (name === "quiet_price_deferred" || name === "quiet_force_deferred" || name === "quiet_force_bypass") {
+    return priceRequestedAfterStaffScenario(now);
+  }
+
+  if (name === "quiet_ai_doubt") {
+    const customer = sampleCustomer(now, "Are you a bot? I want to talk to a real person.");
+    return {
+      customer,
+      messages: [customerMessage(customer)],
+      logs: [],
+      tasks: [],
+      quiet_overrides: QUIET_TEST_OVERRIDE,
+    };
+  }
+
+  if (name === "quiet_after_end_deferred_task") {
+    return priceRequestedAfterStaffScenario(now, {
+      tasks: [
+        {
+          id: "deferred_task_3h",
+          contact_id: "test_contact",
+          session_id: "test_session",
+          status: "deferred",
+          followup_stage: "3h",
+          reason: "low_risk_price_requested_3h",
+          suggested_message: "I can help narrow this down if you tell me your goal.",
+          scheduled_at: "2026-07-01T11:00:00.000Z",
+          skipped_reason: "quiet_hours_deferred",
+        },
+      ],
+    });
+  }
+
+  if (name === "quiet_deferred_log_not_duplicate") {
+    return priceRequestedAfterStaffScenario(now, {
+      logs: [
+        {
+          action_type: "skipped",
+          followup_stage: "3h",
+          status: "price_requested",
+          reason: "quiet_hours_deferred",
+          created_at: isoHoursBefore(now, 1),
+          raw_result: {
+            status: "price_requested",
+            stage: "3h",
+            quiet_hours_deferred: true,
+          },
+        },
+      ],
+    });
   }
 
   if (name === "no_staff") {
@@ -245,6 +336,22 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
   };
 }
 
+function getDefaultNowForScenario(scenario, providedNow) {
+  if (providedNow) {
+    return providedNow;
+  }
+
+  if (scenario === "quiet_after_end_deferred_task") {
+    return "2026-07-01T12:05:00.000Z";
+  }
+
+  if (String(scenario || "").startsWith("quiet_")) {
+    return "2026-07-01T06:05:00.000Z";
+  }
+
+  return new Date().toISOString();
+}
+
 function getLatestCustomerText(messages = [], customer = {}) {
   return (
     messages
@@ -257,6 +364,10 @@ function getLatestCustomerText(messages = [], customer = {}) {
 
 function getPriorityLabel(priority) {
   return PRIORITY_LABELS[priority] || PRIORITY_LABELS.medium;
+}
+
+function normalizeOpenTasksForDecision(tasks = []) {
+  return tasks.map((task) => (task.status === "deferred" ? { ...task, status: "pending" } : task));
 }
 
 function buildTelegramPreview(decision = {}, staffProfile = {}, customer = {}) {
@@ -296,17 +407,21 @@ function buildTelegramPreview(decision = {}, staffProfile = {}, customer = {}) {
   ].join("\n");
 }
 
-function buildResponse({ customer, messages, logs, tasks, now, force = false }) {
+function buildResponse({ customer, messages, logs, tasks, now, force = false, bypassQuiet = false, quietOverrides = {} }) {
   const latestText = getLatestCustomerText(messages, customer);
   const decision = analyzeFollowupDecision({
     customer,
     messages,
     logs,
-    tasks,
+    tasks: normalizeOpenTasksForDecision(tasks),
     now,
     force,
   });
   const staffProfile = getAssignedStaffProfile(customer, messages);
+  const quietState = getQuietHoursState(now, quietOverrides);
+  const quietDeferred = shouldDeferForQuietHours(decision, quietState, Boolean(force && bypassQuiet));
+  const highRiskTelegramAllowed = Boolean(decision.should_send_telegram && decision.skipped_reason === "high_risk_handoff_required");
+  const lowRiskTelegramAllowed = Boolean(decision.telegram_alert_allowed && !quietDeferred);
 
   return {
     ok: true,
@@ -316,11 +431,13 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false }) 
     would_send_customer: false,
     telegram_target_chat_source: TELEGRAM_TARGET_CHAT_SOURCE,
     force: Boolean(force),
+    bypass_quiet: Boolean(bypassQuiet),
+    ...getQuietHoursResponseFields(quietState),
     status_detected: classifyCustomerStatus(messages, customer),
     high_risk_type: getHighRiskType(latestText) || null,
     manual_handoff_required: decision.skipped_reason === "high_risk_handoff_required",
-    telegram_alert_allowed: Boolean(decision.telegram_alert_allowed || decision.should_send_telegram),
-    duplicate_blocked: decision.skipped_reason === "no_due_stage" || Boolean(decision.existing_pending_task),
+    telegram_alert_allowed: highRiskTelegramAllowed || lowRiskTelegramAllowed,
+    duplicate_blocked: decision.skipped_reason === "no_due_stage" || Boolean(decision.existing_pending_task && !quietDeferred),
     opt_out_stopped: decision.stop_reason === "customer_opt_out",
     auto_send_allowed: false,
     staff_name: staffProfile.name,
@@ -329,10 +446,17 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false }) 
     staff_id_source: staffProfile.id_source,
     followup_stage: decision.followup_stage || null,
     suggested_message: decision.suggested_message || "",
-    skipped_reason: decision.skipped_reason || "",
+    skipped_reason: quietDeferred ? "quiet_hours_deferred" : decision.skipped_reason || "",
+    deferred_by_quiet_hours: quietDeferred ? 1 : 0,
+    task_preview_status: quietDeferred ? "deferred" : decision.telegram_alert_allowed ? "pending_or_sent" : "none",
+    task_preview_scheduled_at: quietDeferred ? quietState.defer_until : decision.scheduled_at || "",
     telegram_preview: buildTelegramPreview(decision, staffProfile, customer),
     decision,
   };
+}
+
+function isTruthy(value) {
+  return ["1", "true", "yes", "y", "on"].includes(String(value || "").toLowerCase());
 }
 
 module.exports = async function handler(req, res) {
@@ -349,6 +473,12 @@ module.exports = async function handler(req, res) {
     "staff_map_yinping",
     "staff_map_jett_agent",
     "staff_map_unknown",
+    "quiet_price_deferred",
+    "quiet_ai_doubt",
+    "quiet_force_deferred",
+    "quiet_force_bypass",
+    "quiet_after_end_deferred_task",
+    "quiet_deferred_log_not_duplicate",
     "no_staff",
     "handoff_jett",
     "ai_doubt",
@@ -358,9 +488,10 @@ module.exports = async function handler(req, res) {
   ];
 
   if (req.method === "GET") {
-    const now = req.query?.now || new Date().toISOString();
     const scenario = req.query?.scenario || "price_inquiry";
-    const force = ["1", "true", "yes", "y"].includes(String(req.query?.force || "").toLowerCase());
+    const now = getDefaultNowForScenario(scenario, req.query?.now);
+    const force = isTruthy(req.query?.force) || scenario === "quiet_force_deferred" || scenario === "quiet_force_bypass";
+    const bypassQuiet = isTruthy(req.query?.bypass_quiet) || scenario === "quiet_force_bypass";
     const sample = buildScenario(scenario, now);
 
     return res.status(200).json({
@@ -370,6 +501,8 @@ module.exports = async function handler(req, res) {
         ...sample,
         now,
         force,
+        bypassQuiet,
+        quietOverrides: sample.quiet_overrides,
       }),
     });
   }
@@ -382,14 +515,16 @@ module.exports = async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const now = body.now || new Date().toISOString();
   const scenario = body.scenario;
-  const force = ["1", "true", "yes", "y"].includes(String(body.force || req.query?.force || "").toLowerCase());
+  const now = body.now || getDefaultNowForScenario(scenario, "");
+  const force = isTruthy(body.force || req.query?.force) || scenario === "quiet_force_deferred" || scenario === "quiet_force_bypass";
+  const bypassQuiet = isTruthy(body.bypass_quiet || req.query?.bypass_quiet) || scenario === "quiet_force_bypass";
   const sample = scenario ? buildScenario(scenario, now) : buildScenario("price_inquiry", now);
   const customer = body.customer || sample.customer;
   const messages = Array.isArray(body.messages) ? body.messages : sample.messages;
   const logs = Array.isArray(body.logs) ? body.logs : sample.logs;
   const tasks = Array.isArray(body.tasks) ? body.tasks : sample.tasks;
+  const quietOverrides = body.quiet_overrides || sample.quiet_overrides;
 
   return res.status(200).json(
     buildResponse({
@@ -399,6 +534,8 @@ module.exports = async function handler(req, res) {
       tasks,
       now,
       force,
+      bypassQuiet,
+      quietOverrides,
     })
   );
 };
