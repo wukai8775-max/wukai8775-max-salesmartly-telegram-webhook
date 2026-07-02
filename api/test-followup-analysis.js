@@ -114,6 +114,27 @@ function quoteScenario(now, staff = { name: "Omen", id: "xxx" }) {
   };
 }
 
+function firstGreetingScenario(now, staff = { name: "Jett", id: "1203624" }) {
+  const customerAt = isoHoursBefore(now, 4);
+  const agentAt = isoHoursBefore(now, 3.1);
+  const customer = {
+    ...sampleCustomer(now, "Hi", staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: "Hi",
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, "Hi", customerAt),
+      agentMessage(customer, "Hello, my friend. I'm Jett. How can I help you today?", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
 function priceRequestedAfterStaffScenario(now, extra = {}) {
   const customerAt = isoHoursBefore(now, 5);
   const agentAt = isoHoursBefore(now, 4);
@@ -136,7 +157,21 @@ function priceRequestedAfterStaffScenario(now, extra = {}) {
   };
 }
 
+function singleCustomerScenario(now, text, staff = { name: "Omen", id: "xxx" }) {
+  const customer = sampleCustomer(now, text, staff);
+  return {
+    customer,
+    messages: [customerMessage(customer)],
+    logs: [],
+    tasks: [],
+  };
+}
+
 function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
+  if (name === "first_greeting_no_reply") {
+    return firstGreetingScenario(now);
+  }
+
   if (name === "staff_omen") {
     return quoteScenario(now, { name: "Omen", id: "xxx" });
   }
@@ -162,14 +197,8 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
   }
 
   if (name === "quiet_ai_doubt") {
-    const customer = sampleCustomer(now, "Are you a bot? I want to talk to a real person.");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-      quiet_overrides: QUIET_TEST_OVERRIDE,
-    };
+    const scenario = singleCustomerScenario(now, "Are you a bot? I want to talk to a real person.");
+    return { ...scenario, quiet_overrides: QUIET_TEST_OVERRIDE };
   }
 
   if (name === "quiet_after_end_deferred_task") {
@@ -214,63 +243,27 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
   }
 
   if (name === "handoff_jett") {
-    const customer = sampleCustomer(now, "Are you a bot? I want to talk to a real person.", { name: "Jett", id: "yyy" });
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Are you a bot? I want to talk to a real person.", { name: "Jett", id: "yyy" });
   }
 
   if (name === "price_quote") {
-    const customer = sampleCustomer(now, "Can I get a price quote?");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Can I get a price quote?");
   }
 
   if (name === "catalog_request") {
-    const customer = sampleCustomer(now, "Can I see your catalog");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Can I see your catalog");
   }
 
   if (name === "pricing_delivery") {
-    const customer = sampleCustomer(now, "Pricing, delivery");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Pricing, delivery");
   }
 
   if (name === "price_objection") {
-    const customer = sampleCustomer(now, "Your prices are very high compared to the other supplier.");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Your prices are very high compared to the other supplier.");
   }
 
   if (name === "product_question") {
-    const customer = sampleCustomer(now, "Do you carry pills and oils also?");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Do you carry pills and oils also?");
   }
 
   if (name === "quote_no_reply") {
@@ -278,33 +271,15 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
   }
 
   if (name === "ai_doubt") {
-    const customer = sampleCustomer(now, "Are you a bot? I want to talk to a real person.");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Are you a bot? I want to talk to a real person.");
   }
 
   if (name === "call_request") {
-    const customer = sampleCustomer(now, "Can you call me? I want to talk to a real person.");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "Can you call me? I want to talk to a real person.");
   }
 
   if (name === "opt_out") {
-    const customer = sampleCustomer(now, "No thanks, not interested. Please stop messaging me.");
-    return {
-      customer,
-      messages: [customerMessage(customer)],
-      logs: [],
-      tasks: [],
-    };
+    return singleCustomerScenario(now, "No thanks, not interested. Please stop messaging me.");
   }
 
   if (name === "duplicate_stage") {
@@ -327,13 +302,7 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
     };
   }
 
-  const customer = sampleCustomer(now, "Can I get the price list?");
-  return {
-    customer,
-    messages: [customerMessage(customer)],
-    logs: [],
-    tasks: [],
-  };
+  return singleCustomerScenario(now, "Can I get the price list?");
 }
 
 function getDefaultNowForScenario(scenario, providedNow) {
@@ -468,6 +437,7 @@ module.exports = async function handler(req, res) {
     "price_objection",
     "product_question",
     "quote_no_reply",
+    "first_greeting_no_reply",
     "staff_omen",
     "staff_jett",
     "staff_map_yinping",
@@ -508,10 +478,7 @@ module.exports = async function handler(req, res) {
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({
-      ok: false,
-      error: "Method Not Allowed",
-    });
+    return res.status(405).json({ ok: false, error: "Method Not Allowed" });
   }
 
   const body = req.body || {};
@@ -526,16 +493,5 @@ module.exports = async function handler(req, res) {
   const tasks = Array.isArray(body.tasks) ? body.tasks : sample.tasks;
   const quietOverrides = body.quiet_overrides || sample.quiet_overrides;
 
-  return res.status(200).json(
-    buildResponse({
-      customer,
-      messages,
-      logs,
-      tasks,
-      now,
-      force,
-      bypassQuiet,
-      quietOverrides,
-    })
-  );
+  return res.status(200).json(buildResponse({ customer, messages, logs, tasks, now, force, bypassQuiet, quietOverrides }));
 };
