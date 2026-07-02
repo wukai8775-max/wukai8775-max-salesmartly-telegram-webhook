@@ -156,6 +156,28 @@ function qualityTrustScenario(now, staff = { name: "Jett", id: "1203624" }) {
   };
 }
 
+function b2bWholesaleScenario(now, staff = { name: "Jett", id: "1203624" }) {
+  const customerAt = isoHoursBefore(now, 4);
+  const agentAt = isoHoursBefore(now, 3.1);
+  const customerText = "I have a wellness business and a few China vendors. I'm looking to compare prices and place an order soon.";
+  const customer = {
+    ...sampleCustomer(now, customerText, staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: customerText,
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, customerText, customerAt),
+      agentMessage(customer, "B2B follow-up reply: I can help compare product options, quantities, and wholesale quote direction once I know your main products and expected volume.", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
 function priceRequestedAfterStaffScenario(now, extra = {}) {
   const customerAt = isoHoursBefore(now, 5);
   const agentAt = isoHoursBefore(now, 4);
@@ -195,6 +217,10 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
 
   if (name === "quality_trust_question_no_reply") {
     return qualityTrustScenario(now);
+  }
+
+  if (name === "b2b_wholesale_interest_no_reply") {
+    return b2bWholesaleScenario(now);
   }
 
   if (name === "staff_omen") {
@@ -369,6 +395,10 @@ function getAnalysisPreview(decision = {}, customer = {}) {
     return "客户正在核实检测报告、实验室位置或产品真实性，可能对质量证明仍有顾虑，需要人工跟进确认客户主要担心的是 COA、批次、实验室信息还是首次合作风险。";
   }
 
+  if (decision.status === "b2b_wholesale_interest_no_reply") {
+    return "客户表现出 B2B / 批发 / 大货采购意向，可能正在比较价格、供应稳定性、产品范围或长期合作条件，需要人工及时跟进确认采购需求和报价方向。";
+  }
+
   if (decision.status === "quote_sent_no_reply") {
     return "客户已收到报价但没有继续回复，可能卡在总价、MOQ、运费或首次测试成本。";
   }
@@ -389,6 +419,10 @@ function getAnalysisPreview(decision = {}, customer = {}) {
 
   if (/\b(coa|quality|authentic|real|batch|janoshik|lab|test)\b/.test(text)) {
     return "客户可能卡在质量、COA、真实性或检测报告信息，需要人工先帮客户确认可核对的信息。";
+  }
+
+  if (/\b(bulk|resale|reseller|wholesale|b2b|business|china vendors|compare prices)\b/.test(text)) {
+    return "客户可能有 B2B / 批发采购意向，需要人工确认采购量、产品方向和报价需求。";
   }
 
   return "客户进入可回访阶段，但需要人工先查看上下文再决定是否发送。";
@@ -501,6 +535,7 @@ module.exports = async function handler(req, res) {
     "quote_no_reply",
     "first_greeting_no_reply",
     "quality_trust_question_no_reply",
+    "b2b_wholesale_interest_no_reply",
     "staff_omen",
     "staff_jett",
     "staff_map_yinping",
