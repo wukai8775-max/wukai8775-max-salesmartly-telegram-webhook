@@ -2,42 +2,39 @@
 
 Vercel Serverless API for SaleSmartly and HelpKnow.
 
-Current mode: **AI analysis + Telegram human follow-up reminders**.
+Current mode: AI analysis + Telegram human follow-up reminders.
 
-The system does **not** automatically send messages to SaleSmartly customers. HelpKnow / Omen / Jett continue handling normal customer replies. All Telegram alerts go to `TELEGRAM_CHAT_ID`.
+The system does not automatically send messages to SaleSmartly customers. HelpKnow / Omen / Jett continue handling normal customer replies. All Telegram alerts go to TELEGRAM_CHAT_ID.
 
 ## Core Follow-Up Rule
 
-The normal follow-up reminder logic is now based on message direction first, not on a status whitelist.
+Normal follow-up reminders are based on message direction first.
 
-If the latest `ai` or `human` message is newer than the latest `customer` message, the last message was sent by us and the customer has not replied yet. In that case, the customer enters the Telegram human follow-up reminder flow.
+If the latest ai or human message is newer than the latest customer message, the last message was sent by us and the customer has not replied yet. In that case, the customer enters the Telegram human follow-up reminder flow.
 
-Reminder timing is based on the latest `ai` / `human` message time:
-
-```text
-latest agent reply time + 3h / 6h / 9h / 24h / 48h / 72h
-```
-
-Customer status is used only for customer stage, AI analysis, suggested wording, and priority. It is no longer a hard gate that decides whether a reminder can be created.
-
-Staff ownership is still a hard gate for ordinary reminders: the customer must belong to Omen `1199730`, Omen Agent `1199741`, or Jett Agent `1203624`. This gate applies only to ordinary `【客户回访提醒】`, not high-risk handoff alerts.
-
-If the specific customer scenario cannot be classified but the last message was sent by us and the customer has not replied, the system uses:
+Reminder timing is based on latest agent reply time plus:
 
 ```text
-general_no_reply_after_staff_message
+3h / 6h / 9h / 24h / 48h / 72h
 ```
 
-Exceptions:
+Customer status is used for customer stage, AI analysis, suggested wording, and priority. Staff ownership is a hard gate for ordinary reminders only.
+
+Ordinary follow-up reminders are limited to this staff allowlist:
 
 ```text
-customer opt-out: stop / not interested / no thanks / unsubscribe / don't contact me
-closed customer: current_status=closed / completed / deal_closed / order_completed
-high-risk handoff: ai_doubt / call_request / shipping_info / complaint_or_after_sales / payment_dispute / angry_customer
-duplicate stage already alerted
-quiet hours for normal low-risk reminders
-staff not in `FOLLOWUP_REMINDER_STAFF_ID_ALLOWLIST` for ordinary reminders
+Omen: 1199730
+Omen Agent: 1199741
+Jett Agent: 1203624
 ```
+
+Configure it with:
+
+```text
+FOLLOWUP_REMINDER_STAFF_ID_ALLOWLIST=1199730,1199741,1203624
+```
+
+Only customers whose customers.assigned_staff_id or latest ai/human messages.sender_id is in this allowlist can create ordinary customer follow-up reminders. Customers assigned to other staff are skipped with staff_not_in_followup_allowlist. High-risk handoff alerts are not blocked by this allowlist.
 
 ## Endpoints
 
@@ -95,37 +92,21 @@ FOLLOWUP_QUIET_END=19:00
 FOLLOWUP_QUIET_BEHAVIOR=defer
 ```
 
-`FOLLOWUP_MODE=telegram_only` has highest priority. Even if `AUTO_FOLLOWUP_ENABLED=true`, the analyzer does not call SaleSmartly active-send APIs and does not send customer-facing messages.
+FOLLOWUP_MODE=telegram_only has highest priority. Even if AUTO_FOLLOWUP_ENABLED=true, the analyzer does not call SaleSmartly active-send APIs and does not send customer-facing messages.
 
-`TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility. Current code does not prioritize it. All reminders and emergency alerts go to `TELEGRAM_CHAT_ID`.
-
-Ordinary follow-up reminders are limited to this staff allowlist:
-
-```text
-Omen: 1199730
-Omen Agent: 1199741
-Jett Agent: 1203624
-```
-
-Configure it with:
-
-```text
-FOLLOWUP_REMINDER_STAFF_ID_ALLOWLIST=1199730,1199741,1203624
-```
-
-Only customers whose `assigned_staff_id` or latest `ai`/`human` `messages.sender_id` is in this allowlist can create ordinary `【客户回访提醒】` messages. Customers assigned to other staff are skipped with `staff_not_in_followup_allowlist`. High-risk `【需要人工接入】` alerts are not blocked by this allowlist.
+TELEGRAM_FOLLOWUP_CHAT_ID is retained only for backward compatibility. Current code does not prioritize it. All reminders and emergency alerts go to TELEGRAM_CHAT_ID.
 
 ## Follow-Up Flow
 
 SaleSmartly webhook only receives new events and writes customer/message data into Supabase. It does not scan old conversations or decide whether a customer needs follow-up.
 
-The follow-up logic runs in `/api/analyze-followups`. If no scheduler calls that endpoint, Telegram follow-up reminders only happen when you manually call it from PowerShell or another HTTP client.
+The follow-up logic runs in /api/analyze-followups. If no scheduler calls that endpoint, Telegram follow-up reminders only happen when you manually call it from PowerShell or another HTTP client.
 
-`/api/cron-analyze-followups` is the scheduled wrapper around the same analysis logic.
+/api/cron-analyze-followups is the scheduled wrapper around the same analysis logic.
 
 ## Low-Risk Reminder Statuses
 
-Low-risk statuses create `【客户回访提醒】`, never send customer-facing messages, and obey quiet hours:
+Low-risk statuses create customer follow-up reminders, never send customer-facing messages, and obey quiet hours:
 
 ```text
 first_greeting_no_reply
@@ -145,34 +126,15 @@ price_objection
 product_question_no_reply
 ```
 
-`first_greeting_no_reply` applies when the customer only sent a simple greeting such as `Hi`, `Hello`, `Hey`, or `Good morning`, the AI/human has replied, and the customer did not continue.
-
-`quality_trust_question_no_reply` applies when the customer asks about COA, Janoshik, test report, testing report, purity, batch, laboratory, lab location, testing facility, authenticity, real report, certificate, third-party test, or third-party testing, the AI/human has replied, and the customer did not continue.
-
-Suggested human follow-up for quality/trust questions:
+High-risk statuses create need-human-handoff alerts and are not affected by quiet hours or the ordinary staff allowlist:
 
 ```text
-Hi, just following up - would you like me to help you review the test report, batch details, or lab information again so everything is clear before you decide?
-```
-
-`b2b_wholesale_interest_no_reply` applies when the customer expresses B2B, wholesale, bulk, reseller, business, wellness business, health store, China vendors, channel distribution, commercial purchase, great/best price, compare prices, placing an order soon, or manager discount interest, the AI/human has replied, and the customer did not continue.
-
-Suggested human follow-up for B2B/wholesale interest:
-
-```text
-Hi, just following up - since you mentioned larger quantities and business use, would you like me to help narrow down the best product options and prepare a more suitable wholesale quote for you?
-```
-
-`shipping_address_request_no_reply` applies when our latest AI/human message asked the customer for a shipping address or U.S. address and the customer did not continue.
-
-`staff_next_step_question_no_reply` applies when our latest AI/human message asked the customer to confirm the next step, quantity, product choice, or whether to proceed, and the customer did not continue.
-
-`general_no_reply_after_staff_message` applies when no more specific status matches, but the latest AI/human message is newer than the latest customer message.
-
-Suggested human follow-up for general no-reply:
-
-```text
-Hi, just checking in - would you like me to help with anything else, such as product options, pricing, shipping, or the next step for your order?
+ai_doubt
+call_request
+shipping_info
+complaint_or_after_sales
+payment_dispute
+angry_customer
 ```
 
 ## Telegram Format
@@ -206,103 +168,97 @@ AI分析：
 {suggested_message}
 
 操作建议：
-请人工进入 SaleSmartly，使用“搜索关键词”找到该客户，确认上下文后再手动发送，不要盲目复制。
+请人工进入 SaleSmartly，使用搜索关键词找到该客户，确认上下文后再手动发送，不要盲目复制。
 ```
 
-## High-Risk Handoff Statuses
-
-High-risk statuses create `【需要人工接入】` and are not affected by quiet hours or the ordinary staff allowlist:
+High-risk reminders use:
 
 ```text
-ai_doubt
-call_request
-shipping_info
-complaint_or_after_sales
-payment_dispute
-angry_customer
+【需要人工接入】
 ```
 
-## Automatic Schedule
+## Cron For cron-job.org
 
-### Option A: External HTTP Timer, recommended for current Vercel plan
+cron-job.org has an about 30 second execution timeout. The cron endpoint is therefore paginated and time bounded.
 
-Use an external HTTP scheduler to call once per hour:
+Use a small job first:
 
 ```text
-https://wukai8775-max-salesmartly-telegram.vercel.app/api/cron-analyze-followups?secret=<CRON_SECRET>
+https://wukai8775-max-salesmartly-telegram.vercel.app/api/cron-analyze-followups?secret=<CRON_SECRET>&limit=50&offset=0
 ```
 
-This is currently the safest option because Vercel returned a deployment failure for an active hourly `vercel.json` cron config on this project. That usually means the current Vercel plan does not support hourly Cron frequency.
+Recommended sharded cron-job.org setup:
 
-### Option B: Vercel Cron, only when the plan supports hourly cron
-
-This repo includes `vercel.hourly-cron.example.json` as a copyable example:
-
-```json
-{
-  "crons": [
-    {
-      "path": "/api/cron-analyze-followups",
-      "schedule": "0 * * * *"
-    }
-  ]
-}
+```text
+/api/cron-analyze-followups?secret=<CRON_SECRET>&limit=50&offset=0
+/api/cron-analyze-followups?secret=<CRON_SECRET>&limit=50&offset=50
+/api/cron-analyze-followups?secret=<CRON_SECRET>&limit=50&offset=100
 ```
 
-If the Vercel plan supports hourly Cron, copy this file to `vercel.json` and redeploy.
+The cron endpoint is stateless. It does not require a new database cursor table. Use next_offset or next_cursor from the response as the next offset if you want an external scheduler to rotate through pages. When the endpoint reaches the end of the customer list, next_offset resets to 0.
 
 ## Cron Endpoint
 
-`GET /api/cron-analyze-followups`:
+GET /api/cron-analyze-followups:
 
-- requires `CRON_SECRET`;
-- accepts `Authorization: Bearer <CRON_SECRET>` or `?secret=<CRON_SECRET>`;
-- returns 401 if `CRON_SECRET` is missing or does not match;
-- never uses `force=true`;
-- keeps `FOLLOWUP_MODE=telegram_only`;
-- never calls `sendSaleSmartlyMessage`.
+```text
+requires CRON_SECRET
+accepts Authorization: Bearer <CRON_SECRET> or ?secret=<CRON_SECRET>
+returns 401 if CRON_SECRET is missing or does not match
+supports limit, offset, cursor, and page
+defaults to limit=50
+caps limit at 100
+uses cursor as an alias for offset
+treats page as 1-based, so page=2&limit=50 equals offset=50
+stops before cron-job.org timeout, normally around the 20 second mark
+never uses force=true
+keeps FOLLOWUP_MODE=telegram_only
+never calls sendSaleSmartlyMessage
+```
 
-Response shape:
+Cron response fields include:
 
-```json
-{
-  "ok": true,
-  "success": true,
-  "mode": "telegram_only",
-  "cron": true,
-  "auto_customer_send_disabled": true,
-  "quiet_hours_enabled": true,
-  "quiet_hours_active": false,
-  "quiet_timezone": "Asia/Shanghai",
-  "quiet_start": "13:00",
-  "quiet_end": "19:00",
-  "followup_staff_allowlist_enabled": true,
-  "followup_staff_allowlist": ["1199730", "1199741", "1203624"],
-  "staff_allowlist_hits": 12,
-  "staff_allowlist_skipped": 5,
-  "skipped_by_staff_not_allowlisted": 5,
-  "scanned": 50,
-  "telegram_alerts_created": 0,
-  "tasks_created": 0,
-  "skipped": 0,
-  "errors": 0,
-  "deferred_by_quiet_hours": 0,
-  "results": [
-    {
-      "latest_customer_message_time": "2026-07-01T01:00:00.000Z",
-      "latest_agent_message_time": "2026-07-01T02:00:00.000Z",
-      "last_message_direction": "agent",
-      "detected_status": "general_no_reply_after_staff_message",
-      "assigned_staff_id": "1199741",
-      "assigned_staff_name": "Omen Agent",
-      "staff_in_followup_allowlist": true,
-      "skipped_reason": "",
-      "next_due_stage": "3h",
-      "next_due_at": "2026-07-01T05:00:00.000Z",
-      "duplicate_stage": ""
-    }
-  ]
-}
+```text
+ok
+success
+mode
+cron
+auto_customer_send_disabled
+quiet_hours_enabled
+quiet_hours_active
+quiet_timezone
+quiet_start
+quiet_end
+followup_staff_allowlist_enabled
+followup_staff_allowlist
+staff_allowlist_hits
+staff_allowlist_skipped
+skipped_by_staff_not_allowlisted
+partial
+limit
+offset
+next_offset
+next_cursor
+processed_count
+elapsed_ms
+stopped_reason
+scanned
+telegram_alerts_created
+tasks_created
+skipped
+errors
+deferred_by_quiet_hours
+results
+```
+
+Example result meaning:
+
+```text
+partial=true means this run did not cover the full customer table.
+next_offset=50 means the next shard can call offset=50.
+stopped_reason=more_pages_available means the batch completed but more rows exist.
+stopped_reason=time_budget_exceeded means the runner stopped early to avoid timeout.
+next_offset=0 means the scanner reached the end and can restart from the first page.
 ```
 
 ## Quiet Hours
@@ -323,50 +279,47 @@ FOLLOWUP_QUIET_END=19:00
 FOLLOWUP_QUIET_BEHAVIOR=defer
 ```
 
-When quiet hours are active, low-risk `【客户回访提醒】` messages are deferred instead of sent. High-risk `【需要人工接入】` alerts are still sent immediately.
+When quiet hours are active, low-risk customer follow-up reminders are deferred instead of sent. High-risk need-human-handoff alerts are still sent immediately.
 
 During quiet hours, a low-risk due reminder:
 
-- does not send Telegram;
-- does not write `followup_logs.action_type=telegram_alert`;
-- does not update `last_auto_followup_at`;
-- creates or updates a `followup_tasks` row with `status=deferred`;
-- sets `skipped_reason=quiet_hours_deferred`;
-- sets `scheduled_at` to quiet-hour end time;
-- may write a skipped log with `reason=quiet_hours_deferred`, which does not count as a sent reminder.
+```text
+does not send Telegram
+does not write followup_logs.action_type=telegram_alert
+does not update last_auto_followup_at
+creates or updates a followup_tasks row with status=deferred
+sets skipped_reason=quiet_hours_deferred
+sets scheduled_at to quiet-hour end time
+may write a skipped log with reason=quiet_hours_deferred, which does not count as a sent reminder
+```
 
-After quiet hours end, the next analyzer run sends the deferred reminder if the customer still has not replied and has not entered opt-out or high-risk state. Only `telegram_alert` logs and `sent` tasks count as completed follow-up stages.
+After quiet hours end, the next analyzer run sends the deferred reminder if the customer still has not replied and has not entered opt-out or high-risk state. Only telegram_alert logs and sent tasks count as completed follow-up stages.
 
 ## Manual Analyze Endpoint
 
 Manual trigger:
 
-```bash
-curl -X POST "https://your-domain.vercel.app/api/analyze-followups" \
-  -H "Content-Type: application/json" \
-  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
-  --data-raw '{"limit":50}'
+```text
+POST https://your-domain.vercel.app/api/analyze-followups
+Header: x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>
+Body: {limit:50, offset:0}
 ```
 
-`force=true` still respects quiet hours:
+Manual analyze also supports limit, offset, cursor, and page. limit is capped at 100.
 
-```bash
-curl -X POST "https://your-domain.vercel.app/api/analyze-followups?force=true" \
-  -H "Content-Type: application/json" \
-  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
-  --data-raw '{"limit":50}'
+force=true still respects quiet hours:
+
+```text
+/api/analyze-followups?force=true&limit=50&offset=0
 ```
 
-Admin bypass for testing:
+Admin quiet-hours bypass for testing:
 
-```bash
-curl -X POST "https://your-domain.vercel.app/api/analyze-followups?force=true&bypass_quiet=true" \
-  -H "Content-Type: application/json" \
-  -H "x-salesmartly-webhook-secret: <SALES_SMARTLY_WEBHOOK_SECRET>" \
-  --data-raw '{"limit":50}'
+```text
+/api/analyze-followups?force=true&bypass_quiet=true&limit=50&offset=0
 ```
 
-Even with `bypass_quiet=true`, the system only sends Telegram reminders. It never sends customer-facing messages.
+Even with bypass_quiet=true, the system only sends Telegram reminders. It never sends customer-facing messages.
 
 ## Supabase SQL
 
@@ -466,7 +419,7 @@ alter table customers add column if not exists last_agent_sender_name text;
 alter table messages add column if not exists sender_id text;
 ```
 
-No new database columns are required for new follow-up statuses. `customers.current_status` and `followup_tasks.status` are text columns.
+No new database columns are required for cron pagination. followup_tasks.status is text and can already store deferred.
 
 ## SaleSmartly Official Webhook
 
@@ -504,36 +457,36 @@ call_request
 ai_doubt
 ```
 
-Normal sales questions return `not_a_handoff_trigger` so HelpKnow / Omen / Jett can continue replying normally.
+Normal sales questions return not_a_handoff_trigger so HelpKnow / Omen / Jett can continue replying normally.
 
 ## STAFF_ID_NAME_MAP
 
-Optional JSON object string:
-
-```json
-{
-  "1195645": "管理",
-  "1199730": "Omen",
-  "1201817": "剑冰",
-  "1192958": "邱恺",
-  "1201819": "银萍",
-  "1192960": "杨翔钦",
-  "1192964": "林欣雅",
-  "1192975": "林霖",
-  "1192978": "林雪钦",
-  "1192979": "郑文彬",
-  "1199741": "Omen Agent",
-  "1203624": "Jett Agent"
-}
-```
-
-Single-line Vercel env value:
+Optional JSON object string. Include these IDs at minimum:
 
 ```text
-{"1195645":"管理","1199730":"Omen","1201817":"剑冰","1192958":"邱恺","1201819":"银萍","1192960":"杨翔钦","1192964":"林欣雅","1192975":"林霖","1192978":"林雪钦","1192979":"郑文彬","1199741":"Omen Agent","1203624":"Jett Agent"}
+1199730 = Omen
+1199741 = Omen Agent
+1203624 = Jett Agent
 ```
 
-If invalid, the interfaces do not crash. A safe parse error summary is logged without tokens, phone numbers, or emails.
+Full suggested mapping:
+
+```text
+1195645 = 管理
+1199730 = Omen
+1201817 = 剑冰
+1192958 = 邱恺
+1201819 = 银萍
+1192960 = 杨翔钦
+1192964 = 林欣雅
+1192975 = 林霖
+1192978 = 林雪钦
+1192979 = 郑文彬
+1199741 = Omen Agent
+1203624 = Jett Agent
+```
+
+If STAFF_ID_NAME_MAP is invalid JSON, the interfaces do not crash. A safe parse error summary is logged without tokens, phone numbers, or emails.
 
 ## Test Follow-Up Analysis
 
@@ -541,143 +494,69 @@ This endpoint does not write Supabase, Telegram, or SaleSmartly.
 
 Core dry-run scenarios:
 
-```bash
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=first_greeting_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quality_trust_question_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=b2b_wholesale_interest_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=shipping_address_request_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_next_step_question_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=general_no_reply_after_staff_message"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=customer_replied_after_agent"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_allowlist_omen_1199730"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_allowlist_omen_agent_1199741"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_allowlist_jett_agent_1203624"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_not_allowlisted_1201819"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_missing_id"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=opt_out"
+```text
+/api/test-followup-analysis?scenario=first_greeting_no_reply
+/api/test-followup-analysis?scenario=quality_trust_question_no_reply
+/api/test-followup-analysis?scenario=b2b_wholesale_interest_no_reply
+/api/test-followup-analysis?scenario=shipping_address_request_no_reply
+/api/test-followup-analysis?scenario=staff_next_step_question_no_reply
+/api/test-followup-analysis?scenario=general_no_reply_after_staff_message
+/api/test-followup-analysis?scenario=customer_replied_after_agent
+/api/test-followup-analysis?scenario=staff_allowlist_omen_1199730
+/api/test-followup-analysis?scenario=staff_allowlist_omen_agent_1199741
+/api/test-followup-analysis?scenario=staff_allowlist_jett_agent_1203624
+/api/test-followup-analysis?scenario=staff_not_allowlisted_1201819
+/api/test-followup-analysis?scenario=staff_missing_id
+/api/test-followup-analysis?scenario=quote_no_reply
+/api/test-followup-analysis?scenario=ai_doubt
+/api/test-followup-analysis?scenario=call_request
+/api/test-followup-analysis?scenario=opt_out
 ```
 
 Quiet-hours dry-run scenarios:
 
-```bash
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_price_deferred"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_ai_doubt"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_force_deferred&force=true"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_force_bypass&force=true&bypass_quiet=true"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_after_end_deferred_task"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_deferred_log_not_duplicate"
-```
-
-Expected general no-reply result:
-
-```json
-{
-  "status_detected": "general_no_reply_after_staff_message",
-  "last_message_direction": "agent",
-  "telegram_alert_allowed": true,
-  "followup_stage": "3h",
-  "would_send_customer": false
-}
-```
-
-Expected shipping address request result:
-
-```json
-{
-  "status_detected": "shipping_address_request_no_reply",
-  "telegram_alert_allowed": true,
-  "followup_stage": "3h",
-  "would_send_customer": false
-}
-```
-
-Expected B2B/wholesale result:
-
-```json
-{
-  "status_detected": "b2b_wholesale_interest_no_reply",
-  "telegram_alert_allowed": true,
-  "followup_stage": "3h",
-  "would_send_customer": false
-}
-```
-
-Expected customer-replied result:
-
-```json
-{
-  "last_message_direction": "customer",
-  "telegram_alert_allowed": false,
-  "would_send_customer": false
-}
-```
-
-Expected quiet low-risk result:
-
-```json
-{
-  "quiet_hours_enabled": true,
-  "quiet_hours_active": true,
-  "deferred_by_quiet_hours": 1,
-  "task_preview_status": "deferred",
-  "would_send_customer": false
-}
-```
-
-Expected high-risk quiet result:
-
-```json
-{
-  "manual_handoff_required": true,
-  "telegram_alert_allowed": true,
-  "deferred_by_quiet_hours": 0,
-  "would_send_customer": false
-}
+```text
+/api/test-followup-analysis?scenario=quiet_price_deferred
+/api/test-followup-analysis?scenario=quiet_ai_doubt
+/api/test-followup-analysis?scenario=quiet_force_deferred&force=true
+/api/test-followup-analysis?scenario=quiet_force_bypass&force=true&bypass_quiet=true
+/api/test-followup-analysis?scenario=quiet_after_end_deferred_task
+/api/test-followup-analysis?scenario=quiet_deferred_log_not_duplicate
 ```
 
 Expected staff allowlist result:
 
-```json
-{
-  "followup_staff_allowlist_enabled": true,
-  "followup_staff_allowlist": ["1199730", "1199741", "1203624"],
-  "staff_in_followup_allowlist": true,
-  "telegram_alert_allowed": true,
-  "would_send_customer": false
-}
+```text
+staff_in_followup_allowlist=true
+telegram_alert_allowed=true
+would_send_customer=false
 ```
 
 Expected non-allowlisted staff result:
 
-```json
-{
-  "staff_id": "1201819",
-  "staff_in_followup_allowlist": false,
-  "telegram_alert_allowed": false,
-  "skipped_reason": "staff_not_in_followup_allowlist",
-  "would_send_customer": false
-}
+```text
+staff_id=1201819
+staff_in_followup_allowlist=false
+telegram_alert_allowed=false
+skipped_reason=staff_not_in_followup_allowlist
+would_send_customer=false
 ```
 
 Expected missing staff ID result:
 
-```json
-{
-  "staff_in_followup_allowlist": false,
-  "telegram_alert_allowed": false,
-  "skipped_reason": "staff_not_in_followup_allowlist",
-  "would_send_customer": false
-}
+```text
+staff_in_followup_allowlist=false
+telegram_alert_allowed=false
+skipped_reason=staff_not_in_followup_allowlist
+would_send_customer=false
 ```
 
-Staff mapping scenarios:
+Expected high-risk result:
 
-```bash
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_map_yinping&force=true"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_map_jett_agent&force=true"
+```text
+manual_handoff_required=true
+telegram_alert_allowed=true
+would_send_customer=false
 ```
 
 ## Logging
@@ -696,9 +575,16 @@ tasks_created
 skipped
 errors
 mode=telegram_only
+partial
+limit
+offset
+next_offset
+processed_count
+elapsed_ms
+stopped_reason
 ```
 
-Per-customer result rows include diagnostic fields and staff allowlist diagnostics:
+Per-customer result rows include diagnostic fields:
 
 ```text
 latest_customer_message_time
@@ -716,11 +602,3 @@ skipped_reason=staff_not_in_followup_allowlist
 ```
 
 Logs must not include tokens, service role keys, full phone numbers, or full email addresses.
-
-## Official Docs Used
-
-- Vercel Cron Jobs: https://vercel.com/docs/cron-jobs
-- Managing Vercel Cron Jobs: https://vercel.com/docs/cron-jobs/manage-cron-jobs
-- SaleSmartly API use: https://help-en.salesmartly.com/docs/api-use
-- API header `external-sign`: https://help-en.salesmartly.com/docs/obtain-instructions-for-the-header-parameter-of-api
-- Active sending webhook: https://apifox.com/apidoc/shared-c1f4db0d-60eb-42c7-98f7-66c65bc09fdf/doc-3048234
