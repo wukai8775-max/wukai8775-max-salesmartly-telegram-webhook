@@ -1,4 +1,4 @@
-const { analyzeFollowupDecision, classifyCustomerStatus, getHighRiskType } = require("../lib/followup-rules");
+const { analyzeFollowupDecision, classifyCustomerStatus, getHighRiskType, parseDate } = require("../lib/followup-rules");
 const { getAssignedStaffProfile } = require("../lib/staff-profile");
 const { getQuietHoursState, getQuietHoursResponseFields, shouldDeferForQuietHours } = require("../lib/quiet-hours");
 
@@ -171,7 +171,94 @@ function b2bWholesaleScenario(now, staff = { name: "Jett", id: "1203624" }) {
     customer,
     messages: [
       customerMessage(customer, customerText, customerAt),
-      agentMessage(customer, "B2B follow-up reply: I can help compare product options, quantities, and wholesale quote direction once I know your main products and expected volume.", agentAt, staff),
+      agentMessage(customer, "B2B follow-up reply: I can help compare product options, quantities, and volume direction once I know your main products and expected amount.", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
+function generalNoReplyScenario(now, staff = { name: "Omen", id: "1199741" }) {
+  const customerAt = isoHoursBefore(now, 4);
+  const agentAt = isoHoursBefore(now, 3.1);
+  const customerText = "I am not sure yet.";
+  const customer = {
+    ...sampleCustomer(now, customerText, staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: customerText,
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, customerText, customerAt),
+      agentMessage(customer, "No problem. I can help whenever you are ready.", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
+function shippingAddressRequestScenario(now, staff = { name: "Jett", id: "1203624" }) {
+  const customerAt = isoHoursBefore(now, 4);
+  const agentAt = isoHoursBefore(now, 3.1);
+  const customer = {
+    ...sampleCustomer(now, "Thank you", staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: "Thank you",
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, "Thank you", customerAt),
+      agentMessage(customer, "Do you have a shipping address in the United States?", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
+function staffNextStepScenario(now, staff = { name: "Omen", id: "1199741" }) {
+  const customerAt = isoHoursBefore(now, 4);
+  const agentAt = isoHoursBefore(now, 3.1);
+  const customer = {
+    ...sampleCustomer(now, "Thanks, I will check", staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: "Thanks, I will check",
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, "Thanks, I will check", customerAt),
+      agentMessage(customer, "Would you like to proceed with the next step? Please confirm when you are ready.", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
+function customerRepliedAfterAgentScenario(now, staff = { name: "Omen", id: "1199741" }) {
+  const customerAt = isoHoursBefore(now, 5);
+  const agentAt = isoHoursBefore(now, 4);
+  const secondCustomerAt = isoHoursBefore(now, 3.1);
+  const customer = {
+    ...sampleCustomer(now, "Thanks", staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: secondCustomerAt,
+    last_customer_message: "Thanks",
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, "Can you send more information?", customerAt),
+      agentMessage(customer, "Sure, I sent the details above. Let me know if you need anything else.", agentAt, staff),
+      customerMessage(customer, "Thanks", secondCustomerAt),
     ],
     logs: [],
     tasks: [],
@@ -221,6 +308,22 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
 
   if (name === "b2b_wholesale_interest_no_reply") {
     return b2bWholesaleScenario(now);
+  }
+
+  if (name === "general_no_reply_after_staff_message") {
+    return generalNoReplyScenario(now);
+  }
+
+  if (name === "shipping_address_request_no_reply") {
+    return shippingAddressRequestScenario(now);
+  }
+
+  if (name === "staff_next_step_question_no_reply") {
+    return staffNextStepScenario(now);
+  }
+
+  if (name === "customer_replied_after_agent") {
+    return customerRepliedAfterAgentScenario(now);
   }
 
   if (name === "staff_omen") {
@@ -372,14 +475,27 @@ function getDefaultNowForScenario(scenario, providedNow) {
   return new Date().toISOString();
 }
 
+function sortMessagesAsc(messages = []) {
+  return [...messages].sort((a, b) => {
+    const aTime = parseDate(a.message_time)?.getTime() || 0;
+    const bTime = parseDate(b.message_time)?.getTime() || 0;
+    return aTime - bTime;
+  });
+}
+
+function getLatestMessageByDirection(messages = [], directions = []) {
+  const directionSet = new Set(directions);
+  return sortMessagesAsc(messages)
+    .reverse()
+    .find((message) => directionSet.has(message.direction));
+}
+
 function getLatestCustomerText(messages = [], customer = {}) {
-  return (
-    messages
-      .filter((message) => message.direction === "customer")
-      .slice(-1)[0]?.message_text ||
-    customer.last_customer_message ||
-    ""
-  );
+  return getLatestMessageByDirection(messages, ["customer"])?.message_text || customer.last_customer_message || "";
+}
+
+function getLatestAgentText(messages = []) {
+  return getLatestMessageByDirection(messages, ["ai", "human"])?.message_text || "未提供";
 }
 
 function getPriorityLabel(priority) {
@@ -397,6 +513,18 @@ function getAnalysisPreview(decision = {}, customer = {}) {
 
   if (decision.status === "b2b_wholesale_interest_no_reply") {
     return "客户表现出 B2B / 批发 / 大货采购意向，可能正在比较价格、供应稳定性、产品范围或长期合作条件，需要人工及时跟进确认采购需求和报价方向。";
+  }
+
+  if (decision.status === "shipping_address_request_no_reply") {
+    return "我们已经向客户追问收货地址或配送信息，但客户暂时没有继续回复，需要人工轻量跟进，确认客户是否还准备继续推进付款或下单流程。";
+  }
+
+  if (decision.status === "staff_next_step_question_no_reply") {
+    return "我们已经向客户追问下一步确认信息，但客户暂时没有继续回复，需要人工轻量回访，确认客户是否还需要产品、数量、价格、物流或订单方面的帮助。";
+  }
+
+  if (decision.status === "general_no_reply_after_staff_message") {
+    return "客户在我们回复后暂时没有继续回复，当前没有明确拒绝或结束意向，需要人工轻量回访，确认客户是否还需要产品、价格、物流或订单方面的帮助。";
   }
 
   if (decision.status === "quote_sent_no_reply") {
@@ -432,7 +560,7 @@ function normalizeOpenTasksForDecision(tasks = []) {
   return tasks.map((task) => (task.status === "deferred" ? { ...task, status: "pending" } : task));
 }
 
-function buildTelegramPreview(decision = {}, staffProfile = {}, customer = {}) {
+function buildTelegramPreview(decision = {}, staffProfile = {}, customer = {}, messages = []) {
   if (decision.skipped_reason === "high_risk_handoff_required") {
     return [
       "【需要人工接入】",
@@ -463,6 +591,9 @@ function buildTelegramPreview(decision = {}, staffProfile = {}, customer = {}) {
     "",
     "客户最近消息：",
     decision.last_customer_message || customer.last_customer_message || "未提供",
+    "",
+    "我们最后回复：",
+    getLatestAgentText(messages),
     "",
     "AI分析：",
     getAnalysisPreview(decision, customer),
@@ -498,11 +629,16 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false, by
     force: Boolean(force),
     bypass_quiet: Boolean(bypassQuiet),
     ...getQuietHoursResponseFields(quietState),
+    latest_customer_message_time: decision.latest_customer_message_time || "",
+    latest_agent_message_time: decision.latest_agent_message_time || "",
+    last_message_direction: decision.last_message_direction || "unknown",
+    detected_status: decision.detected_status || decision.status || "unknown",
     status_detected: classifyCustomerStatus(messages, customer),
     high_risk_type: getHighRiskType(latestText) || null,
     manual_handoff_required: decision.skipped_reason === "high_risk_handoff_required",
     telegram_alert_allowed: highRiskTelegramAllowed || lowRiskTelegramAllowed,
-    duplicate_blocked: decision.skipped_reason === "no_due_stage",
+    duplicate_blocked: decision.skipped_reason === "no_due_stage" && Boolean(decision.duplicate_stage),
+    duplicate_stage: decision.duplicate_stage || "",
     opt_out_stopped: decision.stop_reason === "customer_opt_out",
     auto_send_allowed: false,
     staff_name: staffProfile.name,
@@ -510,12 +646,14 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false, by
     staff_source: staffProfile.name_source,
     staff_id_source: staffProfile.id_source,
     followup_stage: decision.followup_stage || null,
+    next_due_stage: decision.next_due_stage || decision.followup_stage || "",
+    next_due_at: decision.next_due_at || decision.scheduled_at || "",
     suggested_message: decision.suggested_message || "",
     skipped_reason: quietDeferred ? "quiet_hours_deferred" : decision.skipped_reason || "",
     deferred_by_quiet_hours: quietDeferred ? 1 : 0,
     task_preview_status: quietDeferred ? "deferred" : decision.telegram_alert_allowed ? "pending_or_sent" : "none",
     task_preview_scheduled_at: quietDeferred ? quietState.defer_until : decision.scheduled_at || "",
-    telegram_preview: buildTelegramPreview(decision, staffProfile, customer),
+    telegram_preview: buildTelegramPreview(decision, staffProfile, customer, messages),
     decision,
   };
 }
@@ -536,6 +674,10 @@ module.exports = async function handler(req, res) {
     "first_greeting_no_reply",
     "quality_trust_question_no_reply",
     "b2b_wholesale_interest_no_reply",
+    "staff_next_step_question_no_reply",
+    "shipping_address_request_no_reply",
+    "general_no_reply_after_staff_message",
+    "customer_replied_after_agent",
     "staff_omen",
     "staff_jett",
     "staff_map_yinping",
