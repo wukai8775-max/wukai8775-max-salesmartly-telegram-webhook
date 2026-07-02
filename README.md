@@ -6,6 +6,36 @@ Current mode: **AI analysis + Telegram human follow-up reminders**.
 
 The system does **not** automatically send messages to SaleSmartly customers. HelpKnow / Omen / Jett continue handling normal customer replies. All Telegram alerts go to `TELEGRAM_CHAT_ID`.
 
+## Core Follow-Up Rule
+
+The normal follow-up reminder logic is now based on message direction first, not on a status whitelist.
+
+If the latest `ai` or `human` message is newer than the latest `customer` message, the last message was sent by us and the customer has not replied yet. In that case, the customer enters the Telegram human follow-up reminder flow.
+
+Reminder timing is based on the latest `ai` / `human` message time:
+
+```text
+latest agent reply time + 3h / 6h / 9h / 24h / 48h / 72h
+```
+
+Customer status is used only for customer stage, AI analysis, suggested wording, and priority. It is no longer a hard gate that decides whether a reminder can be created.
+
+If the specific customer scenario cannot be classified but the last message was sent by us and the customer has not replied, the system uses:
+
+```text
+general_no_reply_after_staff_message
+```
+
+Exceptions:
+
+```text
+customer opt-out: stop / not interested / no thanks / unsubscribe / don't contact me
+closed customer: current_status=closed / completed / deal_closed / order_completed
+high-risk handoff: ai_doubt / call_request / shipping_info / complaint_or_after_sales / payment_dispute / angry_customer
+duplicate stage already alerted
+quiet hours for normal low-risk reminders
+```
+
 ## Endpoints
 
 ```text
@@ -81,6 +111,9 @@ Low-risk statuses create `【客户回访提醒】`, never send customer-facing 
 first_greeting_no_reply
 quality_trust_question_no_reply
 b2b_wholesale_interest_no_reply
+staff_next_step_question_no_reply
+shipping_address_request_no_reply
+general_no_reply_after_staff_message
 price_requested
 price_list_requested
 quote_sent_no_reply
@@ -108,6 +141,52 @@ Suggested human follow-up for B2B/wholesale interest:
 
 ```text
 Hi, just following up - since you mentioned larger quantities and business use, would you like me to help narrow down the best product options and prepare a more suitable wholesale quote for you?
+```
+
+`shipping_address_request_no_reply` applies when our latest AI/human message asked the customer for a shipping address or U.S. address and the customer did not continue.
+
+`staff_next_step_question_no_reply` applies when our latest AI/human message asked the customer to confirm the next step, quantity, product choice, or whether to proceed, and the customer did not continue.
+
+`general_no_reply_after_staff_message` applies when no more specific status matches, but the latest AI/human message is newer than the latest customer message.
+
+Suggested human follow-up for general no-reply:
+
+```text
+Hi, just checking in - would you like me to help with anything else, such as product options, pricing, shipping, or the next step for your order?
+```
+
+## Telegram Format
+
+Normal follow-up reminders use this format:
+
+```text
+【客户回访提醒】
+
+客户阶段：{status}
+回访节点：{followup_stage}
+优先级：{priority}
+接待客服：{staff_name}
+接待客服ID：{staff_id}
+
+WS名称：{ws_display_name}
+客户名称：{customer_name}
+联系方式：{phone/email}
+搜索关键词：{search_keyword}
+
+客户最近消息：
+{last_customer_message}
+
+我们最后回复：
+{last_agent_message}
+
+AI分析：
+{analysis}
+
+建议人工回访话术：
+{suggested_message}
+
+操作建议：
+请人工进入 SaleSmartly，使用“搜索关键词”找到该客户，确认上下文后再手动发送，不要盲目复制。
 ```
 
 ## High-Risk Handoff Statuses
@@ -182,7 +261,19 @@ Response shape:
   "tasks_created": 0,
   "skipped": 0,
   "errors": 0,
-  "deferred_by_quiet_hours": 0
+  "deferred_by_quiet_hours": 0,
+  "results": [
+    {
+      "latest_customer_message_time": "2026-07-01T01:00:00.000Z",
+      "latest_agent_message_time": "2026-07-01T02:00:00.000Z",
+      "last_message_direction": "agent",
+      "detected_status": "general_no_reply_after_staff_message",
+      "skipped_reason": "",
+      "next_due_stage": "3h",
+      "next_due_at": "2026-07-01T05:00:00.000Z",
+      "duplicate_stage": ""
+    }
+  ]
 }
 ```
 
@@ -425,10 +516,14 @@ Core dry-run scenarios:
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=first_greeting_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quality_trust_question_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=b2b_wholesale_interest_no_reply"
-curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_quote"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=shipping_address_request_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_next_step_question_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=general_no_reply_after_staff_message"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=customer_replied_after_agent"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=opt_out"
 ```
 
 Quiet-hours dry-run scenarios:
@@ -442,11 +537,23 @@ curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_a
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_deferred_log_not_duplicate"
 ```
 
-Expected quality/trust result:
+Expected general no-reply result:
 
 ```json
 {
-  "status_detected": "quality_trust_question_no_reply",
+  "status_detected": "general_no_reply_after_staff_message",
+  "last_message_direction": "agent",
+  "telegram_alert_allowed": true,
+  "followup_stage": "3h",
+  "would_send_customer": false
+}
+```
+
+Expected shipping address request result:
+
+```json
+{
+  "status_detected": "shipping_address_request_no_reply",
   "telegram_alert_allowed": true,
   "followup_stage": "3h",
   "would_send_customer": false
@@ -460,6 +567,16 @@ Expected B2B/wholesale result:
   "status_detected": "b2b_wholesale_interest_no_reply",
   "telegram_alert_allowed": true,
   "followup_stage": "3h",
+  "would_send_customer": false
+}
+```
+
+Expected customer-replied result:
+
+```json
+{
+  "last_message_direction": "customer",
+  "telegram_alert_allowed": false,
   "would_send_customer": false
 }
 ```
@@ -510,6 +627,19 @@ tasks_created
 skipped
 errors
 mode=telegram_only
+```
+
+Per-customer result rows include diagnostic fields:
+
+```text
+latest_customer_message_time
+latest_agent_message_time
+last_message_direction
+detected_status
+skipped_reason
+next_due_stage
+next_due_at
+duplicate_stage
 ```
 
 Logs must not include tokens, service role keys, full phone numbers, or full email addresses.
