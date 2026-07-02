@@ -5,7 +5,29 @@ const { getQuietHoursState } = require("../lib/quiet-hours");
 function getLimit(req) {
   const raw = req.query?.limit || 50;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 50;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(Math.floor(parsed), 100) : 50;
+}
+
+function getNonNegativeInteger(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function getOffset(req, limit) {
+  if (req.query?.cursor !== undefined && req.query?.cursor !== "") {
+    return getNonNegativeInteger(req.query.cursor, 0);
+  }
+
+  if (req.query?.offset !== undefined && req.query?.offset !== "") {
+    return getNonNegativeInteger(req.query.offset, 0);
+  }
+
+  if (req.query?.page !== undefined && req.query?.page !== "") {
+    const page = getNonNegativeInteger(req.query.page, 1);
+    return Math.max(page - 1, 0) * limit;
+  }
+
+  return 0;
 }
 
 function getCronSecret(req) {
@@ -40,6 +62,8 @@ module.exports = async function handler(req, res) {
   }
 
   const now = req.query?.now;
+  const limit = getLimit(req);
+  const offset = getOffset(req, limit);
 
   if (!hasSupabaseEnv()) {
     return res.status(500).json({
@@ -55,13 +79,24 @@ module.exports = async function handler(req, res) {
       skipped: 0,
       errors: 1,
       deferred_by_quiet_hours: 0,
+      partial: false,
+      limit,
+      offset,
+      next_offset: offset,
+      next_cursor: offset,
+      processed_count: 0,
+      elapsed_ms: 0,
+      stopped_reason: "missing_supabase_env",
       error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
     });
   }
 
   try {
     const result = await runFollowupAnalysis({
-      limit: getLimit(req),
+      limit,
+      offset,
+      maxLimit: 100,
+      maxExecutionMs: 20000,
       now,
       force: false,
       bypassQuiet: false,
@@ -75,7 +110,7 @@ module.exports = async function handler(req, res) {
       bypass_quiet: false,
     });
   } catch (error) {
-    return res.status(500).json({
+    return res.status(200).json({
       ...buildBaseResponse({ quietState: getQuietHoursState(now), force: false, bypassQuiet: false, cron: true }),
       ok: false,
       success: false,
@@ -86,6 +121,14 @@ module.exports = async function handler(req, res) {
       skipped: 0,
       errors: 1,
       deferred_by_quiet_hours: 0,
+      partial: false,
+      limit,
+      offset,
+      next_offset: offset,
+      next_cursor: offset,
+      processed_count: 0,
+      elapsed_ms: 0,
+      stopped_reason: "cron_runner_error",
       error: error.message,
     });
   }
