@@ -20,6 +20,8 @@ latest agent reply time + 3h / 6h / 9h / 24h / 48h / 72h
 
 Customer status is used only for customer stage, AI analysis, suggested wording, and priority. It is no longer a hard gate that decides whether a reminder can be created.
 
+Staff ownership is still a hard gate for ordinary reminders: the customer must belong to Omen `1199730`, Omen Agent `1199741`, or Jett Agent `1203624`. This gate applies only to ordinary `【客户回访提醒】`, not high-risk handoff alerts.
+
 If the specific customer scenario cannot be classified but the last message was sent by us and the customer has not replied, the system uses:
 
 ```text
@@ -34,6 +36,7 @@ closed customer: current_status=closed / completed / deal_closed / order_complet
 high-risk handoff: ai_doubt / call_request / shipping_info / complaint_or_after_sales / payment_dispute / angry_customer
 duplicate stage already alerted
 quiet hours for normal low-risk reminders
+staff not in `FOLLOWUP_REMINDER_STAFF_ID_ALLOWLIST` for ordinary reminders
 ```
 
 ## Endpoints
@@ -74,6 +77,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 SALES_SMARTLY_WEBHOOK_SECRET=
 CRON_SECRET=
+FOLLOWUP_REMINDER_STAFF_ID_ALLOWLIST=1199730,1199741,1203624
 ```
 
 Optional:
@@ -94,6 +98,22 @@ FOLLOWUP_QUIET_BEHAVIOR=defer
 `FOLLOWUP_MODE=telegram_only` has highest priority. Even if `AUTO_FOLLOWUP_ENABLED=true`, the analyzer does not call SaleSmartly active-send APIs and does not send customer-facing messages.
 
 `TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility. Current code does not prioritize it. All reminders and emergency alerts go to `TELEGRAM_CHAT_ID`.
+
+Ordinary follow-up reminders are limited to this staff allowlist:
+
+```text
+Omen: 1199730
+Omen Agent: 1199741
+Jett Agent: 1203624
+```
+
+Configure it with:
+
+```text
+FOLLOWUP_REMINDER_STAFF_ID_ALLOWLIST=1199730,1199741,1203624
+```
+
+Only customers whose `assigned_staff_id` or latest `ai`/`human` `messages.sender_id` is in this allowlist can create ordinary `【客户回访提醒】` messages. Customers assigned to other staff are skipped with `staff_not_in_followup_allowlist`. High-risk `【需要人工接入】` alerts are not blocked by this allowlist.
 
 ## Follow-Up Flow
 
@@ -191,7 +211,7 @@ AI分析：
 
 ## High-Risk Handoff Statuses
 
-High-risk statuses create `【需要人工接入】` and are not affected by quiet hours:
+High-risk statuses create `【需要人工接入】` and are not affected by quiet hours or the ordinary staff allowlist:
 
 ```text
 ai_doubt
@@ -256,6 +276,11 @@ Response shape:
   "quiet_timezone": "Asia/Shanghai",
   "quiet_start": "13:00",
   "quiet_end": "19:00",
+  "followup_staff_allowlist_enabled": true,
+  "followup_staff_allowlist": ["1199730", "1199741", "1203624"],
+  "staff_allowlist_hits": 12,
+  "staff_allowlist_skipped": 5,
+  "skipped_by_staff_not_allowlisted": 5,
   "scanned": 50,
   "telegram_alerts_created": 0,
   "tasks_created": 0,
@@ -268,6 +293,9 @@ Response shape:
       "latest_agent_message_time": "2026-07-01T02:00:00.000Z",
       "last_message_direction": "agent",
       "detected_status": "general_no_reply_after_staff_message",
+      "assigned_staff_id": "1199741",
+      "assigned_staff_name": "Omen Agent",
+      "staff_in_followup_allowlist": true,
       "skipped_reason": "",
       "next_due_stage": "3h",
       "next_due_at": "2026-07-01T05:00:00.000Z",
@@ -485,6 +513,7 @@ Optional JSON object string:
 ```json
 {
   "1195645": "管理",
+  "1199730": "Omen",
   "1201817": "剑冰",
   "1192958": "邱恺",
   "1201819": "银萍",
@@ -501,7 +530,7 @@ Optional JSON object string:
 Single-line Vercel env value:
 
 ```text
-{"1195645":"管理","1201817":"剑冰","1192958":"邱恺","1201819":"银萍","1192960":"杨翔钦","1192964":"林欣雅","1192975":"林霖","1192978":"林雪钦","1192979":"郑文彬","1199741":"Omen Agent","1203624":"Jett Agent"}
+{"1195645":"管理","1199730":"Omen","1201817":"剑冰","1192958":"邱恺","1201819":"银萍","1192960":"杨翔钦","1192964":"林欣雅","1192975":"林霖","1192978":"林雪钦","1192979":"郑文彬","1199741":"Omen Agent","1203624":"Jett Agent"}
 ```
 
 If invalid, the interfaces do not crash. A safe parse error summary is logged without tokens, phone numbers, or emails.
@@ -520,6 +549,11 @@ curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=shippin
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_next_step_question_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=general_no_reply_after_staff_message"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=customer_replied_after_agent"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_allowlist_omen_1199730"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_allowlist_omen_agent_1199741"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_allowlist_jett_agent_1203624"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_not_allowlisted_1201819"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=staff_missing_id"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
@@ -604,6 +638,41 @@ Expected high-risk quiet result:
 }
 ```
 
+Expected staff allowlist result:
+
+```json
+{
+  "followup_staff_allowlist_enabled": true,
+  "followup_staff_allowlist": ["1199730", "1199741", "1203624"],
+  "staff_in_followup_allowlist": true,
+  "telegram_alert_allowed": true,
+  "would_send_customer": false
+}
+```
+
+Expected non-allowlisted staff result:
+
+```json
+{
+  "staff_id": "1201819",
+  "staff_in_followup_allowlist": false,
+  "telegram_alert_allowed": false,
+  "skipped_reason": "staff_not_in_followup_allowlist",
+  "would_send_customer": false
+}
+```
+
+Expected missing staff ID result:
+
+```json
+{
+  "staff_in_followup_allowlist": false,
+  "telegram_alert_allowed": false,
+  "skipped_reason": "staff_not_in_followup_allowlist",
+  "would_send_customer": false
+}
+```
+
 Staff mapping scenarios:
 
 ```bash
@@ -629,7 +698,7 @@ errors
 mode=telegram_only
 ```
 
-Per-customer result rows include diagnostic fields:
+Per-customer result rows include diagnostic fields and staff allowlist diagnostics:
 
 ```text
 latest_customer_message_time
@@ -640,6 +709,10 @@ skipped_reason
 next_due_stage
 next_due_at
 duplicate_stage
+assigned_staff_id
+assigned_staff_name
+staff_in_followup_allowlist
+skipped_reason=staff_not_in_followup_allowlist
 ```
 
 Logs must not include tokens, service role keys, full phone numbers, or full email addresses.
