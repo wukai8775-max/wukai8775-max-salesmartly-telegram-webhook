@@ -80,6 +80,7 @@ Low-risk statuses create `【客户回访提醒】`, never send customer-facing 
 ```text
 first_greeting_no_reply
 quality_trust_question_no_reply
+b2b_wholesale_interest_no_reply
 price_requested
 price_list_requested
 quote_sent_no_reply
@@ -99,6 +100,14 @@ Suggested human follow-up for quality/trust questions:
 
 ```text
 Hi, just following up - would you like me to help you review the test report, batch details, or lab information again so everything is clear before you decide?
+```
+
+`b2b_wholesale_interest_no_reply` applies when the customer expresses B2B, wholesale, bulk, reseller, business, wellness business, health store, China vendors, channel distribution, commercial purchase, great/best price, compare prices, placing an order soon, or manager discount interest, the AI/human has replied, and the customer did not continue.
+
+Suggested human follow-up for B2B/wholesale interest:
+
+```text
+Hi, just following up - since you mentioned larger quantities and business use, would you like me to help narrow down the best product options and prepare a more suitable wholesale quote for you?
 ```
 
 ## High-Risk Handoff Statuses
@@ -415,6 +424,7 @@ Core dry-run scenarios:
 ```bash
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=first_greeting_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quality_trust_question_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=b2b_wholesale_interest_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_quote"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
@@ -437,6 +447,17 @@ Expected quality/trust result:
 ```json
 {
   "status_detected": "quality_trust_question_no_reply",
+  "telegram_alert_allowed": true,
+  "followup_stage": "3h",
+  "would_send_customer": false
+}
+```
+
+Expected B2B/wholesale result:
+
+```json
+{
+  "status_detected": "b2b_wholesale_interest_no_reply",
   "telegram_alert_allowed": true,
   "followup_stage": "3h",
   "would_send_customer": false
