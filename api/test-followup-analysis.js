@@ -360,6 +360,40 @@ function getPriorityLabel(priority) {
   return PRIORITY_LABELS[priority] || PRIORITY_LABELS.medium;
 }
 
+function getAnalysisPreview(decision = {}, customer = {}) {
+  if (decision.status === "first_greeting_no_reply") {
+    return "客户只发送了初始问候，AI/业务员已回复开场白，但客户没有继续说明需求，需要人工轻量回访，重新引导客户说明想了解的产品或目标。";
+  }
+
+  if (decision.status === "quality_trust_question_no_reply") {
+    return "客户正在核实检测报告、实验室位置或产品真实性，可能对质量证明仍有顾虑，需要人工跟进确认客户主要担心的是 COA、批次、实验室信息还是首次合作风险。";
+  }
+
+  if (decision.status === "quote_sent_no_reply") {
+    return "客户已收到报价但没有继续回复，可能卡在总价、MOQ、运费或首次测试成本。";
+  }
+
+  if (decision.status === "shipping_question_no_reply") {
+    return "客户问过物流后没有继续，可能在担心运费、时效、追踪或清关。";
+  }
+
+  if (decision.status === "price_objection") {
+    return "客户认为价格偏高或正在比较其他报价，需要人工解释订单组成并判断是否适合小单测试。";
+  }
+
+  if (decision.status === "product_question_no_reply") {
+    return "客户在询问是否有某类产品或剂型，需要人工确认具体需求后再给出产品方向。";
+  }
+
+  const text = String(decision.last_customer_message || customer.last_customer_message || "").toLowerCase();
+
+  if (/\b(coa|quality|authentic|real|batch|janoshik|lab|test)\b/.test(text)) {
+    return "客户可能卡在质量、COA、真实性或检测报告信息，需要人工先帮客户确认可核对的信息。";
+  }
+
+  return "客户进入可回访阶段，但需要人工先查看上下文再决定是否发送。";
+}
+
 function normalizeOpenTasksForDecision(tasks = []) {
   return tasks.map((task) => (task.status === "deferred" ? { ...task, status: "pending" } : task));
 }
@@ -395,6 +429,9 @@ function buildTelegramPreview(decision = {}, staffProfile = {}, customer = {}) {
     "",
     "客户最近消息：",
     decision.last_customer_message || customer.last_customer_message || "未提供",
+    "",
+    "AI分析：",
+    getAnalysisPreview(decision, customer),
     "",
     "建议人工回访话术：",
     decision.suggested_message || "未提供",
