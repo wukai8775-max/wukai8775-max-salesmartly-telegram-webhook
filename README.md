@@ -65,13 +65,54 @@ FOLLOWUP_QUIET_BEHAVIOR=defer
 
 `TELEGRAM_FOLLOWUP_CHAT_ID` is retained only for backward compatibility. Current code does not prioritize it. All reminders and emergency alerts go to `TELEGRAM_CHAT_ID`.
 
-## Why Manual PowerShell Was Required Before
+## Follow-Up Flow
 
 SaleSmartly webhook only receives new events and writes customer/message data into Supabase. It does not scan old conversations or decide whether a customer needs follow-up.
 
 The follow-up logic runs in `/api/analyze-followups`. If no scheduler calls that endpoint, Telegram follow-up reminders only happen when you manually call it from PowerShell or another HTTP client.
 
 `/api/cron-analyze-followups` is the scheduled wrapper around the same analysis logic.
+
+## Low-Risk Reminder Statuses
+
+Low-risk statuses create `【客户回访提醒】`, never send customer-facing messages, and obey quiet hours:
+
+```text
+first_greeting_no_reply
+quality_trust_question_no_reply
+price_requested
+price_list_requested
+quote_sent_no_reply
+payment_interest_no_reply
+shipping_question_no_reply
+later_followup
+high_intent_no_reply
+price_objection
+product_question_no_reply
+```
+
+`first_greeting_no_reply` applies when the customer only sent a simple greeting such as `Hi`, `Hello`, `Hey`, or `Good morning`, the AI/human has replied, and the customer did not continue.
+
+`quality_trust_question_no_reply` applies when the customer asks about COA, Janoshik, test report, testing report, purity, batch, laboratory, lab location, testing facility, authenticity, real report, certificate, third-party test, or third-party testing, the AI/human has replied, and the customer did not continue.
+
+Suggested human follow-up for quality/trust questions:
+
+```text
+Hi, just following up - would you like me to help you review the test report, batch details, or lab information again so everything is clear before you decide?
+```
+
+## High-Risk Handoff Statuses
+
+High-risk statuses create `【需要人工接入】` and are not affected by quiet hours:
+
+```text
+ai_doubt
+call_request
+shipping_info
+complaint_or_after_sales
+payment_dispute
+angry_customer
+```
 
 ## Automatic Schedule
 
@@ -100,11 +141,7 @@ This repo includes `vercel.hourly-cron.example.json` as a copyable example:
 }
 ```
 
-If the Vercel plan supports hourly Cron, copy this file to `vercel.json` and redeploy. Vercel Cron sends a GET request. When `CRON_SECRET` is configured in Vercel, Vercel can send:
-
-```text
-Authorization: Bearer <CRON_SECRET>
-```
+If the Vercel plan supports hourly Cron, copy this file to `vercel.json` and redeploy.
 
 ## Cron Endpoint
 
@@ -159,31 +196,6 @@ FOLLOWUP_QUIET_BEHAVIOR=defer
 ```
 
 When quiet hours are active, low-risk `【客户回访提醒】` messages are deferred instead of sent. High-risk `【需要人工接入】` alerts are still sent immediately.
-
-Low-risk statuses affected by quiet hours:
-
-```text
-price_requested
-price_list_requested
-quote_sent_no_reply
-payment_interest_no_reply
-shipping_question_no_reply
-later_followup
-high_intent_no_reply
-price_objection
-product_question_no_reply
-```
-
-High-risk scenarios not affected by quiet hours:
-
-```text
-ai_doubt
-call_request
-shipping_info
-complaint_or_after_sales
-payment_dispute
-angry_customer
-```
 
 During quiet hours, a low-risk due reminder:
 
@@ -326,7 +338,7 @@ alter table customers add column if not exists last_agent_sender_name text;
 alter table messages add column if not exists sender_id text;
 ```
 
-No new database columns are required for quiet hours. `followup_tasks.status='deferred'` uses the existing text column.
+No new database columns are required for new follow-up statuses. `customers.current_status` and `followup_tasks.status` are text columns.
 
 ## SaleSmartly Official Webhook
 
@@ -398,6 +410,17 @@ If invalid, the interfaces do not crash. A safe parse error summary is logged wi
 
 This endpoint does not write Supabase, Telegram, or SaleSmartly.
 
+Core dry-run scenarios:
+
+```bash
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=first_greeting_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quality_trust_question_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=price_quote"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quote_no_reply"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=ai_doubt"
+curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=call_request"
+```
+
 Quiet-hours dry-run scenarios:
 
 ```bash
@@ -409,7 +432,18 @@ curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_a
 curl "https://your-domain.vercel.app/api/test-followup-analysis?scenario=quiet_deferred_log_not_duplicate"
 ```
 
-Expected low-risk quiet result:
+Expected quality/trust result:
+
+```json
+{
+  "status_detected": "quality_trust_question_no_reply",
+  "telegram_alert_allowed": true,
+  "followup_stage": "3h",
+  "would_send_customer": false
+}
+```
+
+Expected quiet low-risk result:
 
 ```json
 {
