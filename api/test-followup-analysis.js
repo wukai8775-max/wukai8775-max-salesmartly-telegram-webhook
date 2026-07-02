@@ -135,6 +135,27 @@ function firstGreetingScenario(now, staff = { name: "Jett", id: "1203624" }) {
   };
 }
 
+function qualityTrustScenario(now, staff = { name: "Jett", id: "1203624" }) {
+  const customerAt = isoHoursBefore(now, 4);
+  const agentAt = isoHoursBefore(now, 3.1);
+  const customer = {
+    ...sampleCustomer(now, "And where is this testing facility located?", staff),
+    first_customer_message_at: customerAt,
+    last_customer_message_at: customerAt,
+    last_customer_message: "And where is this testing facility located?",
+  };
+
+  return {
+    customer,
+    messages: [
+      customerMessage(customer, "And where is this testing facility located?", customerAt),
+      agentMessage(customer, "Janoshik lab location explanation: Janoshik is an independent third-party testing laboratory, and the report details can be checked from the report information.", agentAt, staff),
+    ],
+    logs: [],
+    tasks: [],
+  };
+}
+
 function priceRequestedAfterStaffScenario(now, extra = {}) {
   const customerAt = isoHoursBefore(now, 5);
   const agentAt = isoHoursBefore(now, 4);
@@ -170,6 +191,10 @@ function singleCustomerScenario(now, text, staff = { name: "Omen", id: "xxx" }) 
 function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
   if (name === "first_greeting_no_reply") {
     return firstGreetingScenario(now);
+  }
+
+  if (name === "quality_trust_question_no_reply") {
+    return qualityTrustScenario(now);
   }
 
   if (name === "staff_omen") {
@@ -438,6 +463,7 @@ module.exports = async function handler(req, res) {
     "product_question",
     "quote_no_reply",
     "first_greeting_no_reply",
+    "quality_trust_question_no_reply",
     "staff_omen",
     "staff_jett",
     "staff_map_yinping",
