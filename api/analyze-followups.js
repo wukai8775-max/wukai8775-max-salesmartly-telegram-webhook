@@ -30,7 +30,32 @@ function verifyWebhookSecret(req) {
 function getLimit(req) {
   const raw = req.body?.limit || req.query?.limit || 50;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 50;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(Math.floor(parsed), 100) : 50;
+}
+
+function getNonNegativeInteger(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function getOffset(req, limit) {
+  const cursor = firstNonEmpty(req.body?.cursor, req.query?.cursor);
+  const offset = firstNonEmpty(req.body?.offset, req.query?.offset);
+  const page = firstNonEmpty(req.body?.page, req.query?.page);
+
+  if (cursor !== "") {
+    return getNonNegativeInteger(cursor, 0);
+  }
+
+  if (offset !== "") {
+    return getNonNegativeInteger(offset, 0);
+  }
+
+  if (page !== "") {
+    return Math.max(getNonNegativeInteger(page, 1) - 1, 0) * limit;
+  }
+
+  return 0;
 }
 
 function isTruthy(value) {
@@ -45,7 +70,7 @@ function isBypassQuietEnabled(req, force) {
   return Boolean(force && isTruthy(firstNonEmpty(req.body?.bypass_quiet, req.query?.bypass_quiet)));
 }
 
-function buildErrorResponse({ now, force, bypassQuiet, message }) {
+function buildErrorResponse({ now, force, bypassQuiet, limit = 50, offset = 0, message }) {
   return {
     ...buildBaseResponse({ quietState: getQuietHoursState(now), force, bypassQuiet, cron: false }),
     ok: false,
@@ -56,6 +81,14 @@ function buildErrorResponse({ now, force, bypassQuiet, message }) {
     skipped: 0,
     errors: 1,
     deferred_by_quiet_hours: 0,
+    partial: false,
+    limit,
+    offset,
+    next_offset: offset,
+    next_cursor: offset,
+    processed_count: 0,
+    elapsed_ms: 0,
+    stopped_reason: "analyze_runner_error",
     error: message,
   };
 }
@@ -78,6 +111,8 @@ module.exports = async function handler(req, res) {
   const force = isForceEnabled(req);
   const bypassQuiet = isBypassQuietEnabled(req, force);
   const now = req.body?.now || req.query?.now;
+  const limit = getLimit(req);
+  const offset = getOffset(req, limit);
 
   if (!hasSupabaseEnv()) {
     return res.status(500).json(
@@ -85,6 +120,8 @@ module.exports = async function handler(req, res) {
         now,
         force,
         bypassQuiet,
+        limit,
+        offset,
         message: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
       })
     );
@@ -92,7 +129,9 @@ module.exports = async function handler(req, res) {
 
   try {
     const result = await runFollowupAnalysis({
-      limit: getLimit(req),
+      limit,
+      offset,
+      maxLimit: 100,
       now,
       force,
       bypassQuiet,
@@ -106,6 +145,8 @@ module.exports = async function handler(req, res) {
         now,
         force,
         bypassQuiet,
+        limit,
+        offset,
         message: error.message,
       })
     );
