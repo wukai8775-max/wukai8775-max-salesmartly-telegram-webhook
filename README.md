@@ -262,6 +262,8 @@ last_customer_message_at is not null
 
 If there are not enough assigned-staff candidates, the scanner may supplement with customers whose `assigned_staff_id` is empty but whose recent `ai`/`human` message `sender_id` is in the allowlist. Non-allowlisted staff customers should not consume the main `messages` / `followup_logs` / `followup_tasks` processing budget.
 
+Known high-risk customers (`risk_level=high` or a high-risk `current_status`) are still included as a small bypass candidate set, so urgent `【需要人工接入】` handling is not blocked by the ordinary follow-up staff allowlist.
+
 ### Option B: Vercel Cron, only when the plan supports hourly cron
 
 This repo includes `vercel.hourly-cron.example.json` as a copyable example:
@@ -317,6 +319,7 @@ Response shape:
   "query_filtered_by_staff_allowlist": true,
   "candidate_count_after_staff_filter": 50,
   "skipped_before_processing_staff_not_allowlisted": 0,
+  "high_risk_candidate_count": 0,
   "partial": true,
   "limit": 50,
   "offset": 0,
