@@ -1,5 +1,9 @@
 const { analyzeFollowupDecision, classifyCustomerStatus, getHighRiskType, parseDate } = require("../lib/followup-rules");
-const { getAssignedStaffProfile } = require("../lib/staff-profile");
+const {
+  getAssignedStaffProfile,
+  getFollowupStaffAllowlistState,
+  isStaffInFollowupAllowlist,
+} = require("../lib/staff-profile");
 const { getQuietHoursState, getQuietHoursResponseFields, shouldDeferForQuietHours } = require("../lib/quiet-hours");
 
 const FOLLOWUP_MODE = "telegram_only";
@@ -200,6 +204,17 @@ function generalNoReplyScenario(now, staff = { name: "Omen", id: "1199741" }) {
   };
 }
 
+function allowlistedStaffScenario(now, staff) {
+  return generalNoReplyScenario(now, staff);
+}
+
+function notAllowlistedStaffScenario(now) {
+  return generalNoReplyScenario(now, { name: "银萍", id: "1201819" });
+}
+
+function missingStaffIdScenario(now) {
+  return generalNoReplyScenario(now, { name: "Unknown Staff" });
+}
 function shippingAddressRequestScenario(now, staff = { name: "Jett", id: "1203624" }) {
   const customerAt = isoHoursBefore(now, 4);
   const agentAt = isoHoursBefore(now, 3.1);
@@ -326,6 +341,25 @@ function buildScenario(name = "price_inquiry", now = new Date().toISOString()) {
     return customerRepliedAfterAgentScenario(now);
   }
 
+  if (name === "staff_allowlist_omen_1199730") {
+    return allowlistedStaffScenario(now, { name: "Omen", id: "1199730" });
+  }
+
+  if (name === "staff_allowlist_omen_agent_1199741") {
+    return allowlistedStaffScenario(now, { name: "Omen Agent", id: "1199741" });
+  }
+
+  if (name === "staff_allowlist_jett_agent_1203624") {
+    return allowlistedStaffScenario(now, { name: "Jett Agent", id: "1203624" });
+  }
+
+  if (name === "staff_not_allowlisted_1201819") {
+    return notAllowlistedStaffScenario(now);
+  }
+
+  if (name === "staff_missing_id") {
+    return missingStaffIdScenario(now);
+  }
   if (name === "staff_omen") {
     return quoteScenario(now, { name: "Omen", id: "xxx" });
   }
@@ -614,10 +648,13 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false, by
     force,
   });
   const staffProfile = getAssignedStaffProfile(customer, messages);
+  const allowlistState = getFollowupStaffAllowlistState();
+  const staffInAllowlist = isStaffInFollowupAllowlist(staffProfile.id, allowlistState);
   const quietState = getQuietHoursState(now, quietOverrides);
-  const quietDeferred = shouldDeferForQuietHours(decision, quietState, Boolean(force && bypassQuiet));
   const highRiskTelegramAllowed = Boolean(decision.should_send_telegram && decision.skipped_reason === "high_risk_handoff_required");
-  const lowRiskTelegramAllowed = Boolean(decision.telegram_alert_allowed && !quietDeferred);
+  const blockedByStaffAllowlist = Boolean(decision.risk_level !== "high" && !staffInAllowlist);
+  const quietDeferred = !blockedByStaffAllowlist && shouldDeferForQuietHours(decision, quietState, Boolean(force && bypassQuiet));
+  const lowRiskTelegramAllowed = Boolean(decision.telegram_alert_allowed && !quietDeferred && !blockedByStaffAllowlist);
 
   return {
     ok: true,
@@ -626,6 +663,9 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false, by
     auto_customer_send_disabled: AUTO_CUSTOMER_SEND_DISABLED,
     would_send_customer: false,
     telegram_target_chat_source: TELEGRAM_TARGET_CHAT_SOURCE,
+    followup_staff_allowlist_enabled: allowlistState.enabled,
+    followup_staff_allowlist: allowlistState.ids,
+    staff_in_followup_allowlist: staffInAllowlist,
     force: Boolean(force),
     bypass_quiet: Boolean(bypassQuiet),
     ...getQuietHoursResponseFields(quietState),
@@ -649,9 +689,9 @@ function buildResponse({ customer, messages, logs, tasks, now, force = false, by
     next_due_stage: decision.next_due_stage || decision.followup_stage || "",
     next_due_at: decision.next_due_at || decision.scheduled_at || "",
     suggested_message: decision.suggested_message || "",
-    skipped_reason: quietDeferred ? "quiet_hours_deferred" : decision.skipped_reason || "",
+    skipped_reason: blockedByStaffAllowlist ? "staff_not_in_followup_allowlist" : quietDeferred ? "quiet_hours_deferred" : decision.skipped_reason || "",
     deferred_by_quiet_hours: quietDeferred ? 1 : 0,
-    task_preview_status: quietDeferred ? "deferred" : decision.telegram_alert_allowed ? "pending_or_sent" : "none",
+    task_preview_status: blockedByStaffAllowlist ? "none" : quietDeferred ? "deferred" : decision.telegram_alert_allowed ? "pending_or_sent" : "none",
     task_preview_scheduled_at: quietDeferred ? quietState.defer_until : decision.scheduled_at || "",
     telegram_preview: buildTelegramPreview(decision, staffProfile, customer, messages),
     decision,
@@ -678,6 +718,11 @@ module.exports = async function handler(req, res) {
     "shipping_address_request_no_reply",
     "general_no_reply_after_staff_message",
     "customer_replied_after_agent",
+    "staff_allowlist_omen_1199730",
+    "staff_allowlist_omen_agent_1199741",
+    "staff_allowlist_jett_agent_1203624",
+    "staff_not_allowlisted_1201819",
+    "staff_missing_id",
     "staff_omen",
     "staff_jett",
     "staff_map_yinping",
